@@ -1,0 +1,13 @@
+# =========================
+dist-newstyle/
+
+*.o
+*.hi
+
+Main
+
+*~
+.DS_Store
+*.swp
+*.swo
+
