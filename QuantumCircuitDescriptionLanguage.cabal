@@ -60,7 +60,7 @@ executable QuantumCircuitDescriptionLanguage
 
     -- .hs or .lhs file containing the Main module.
     main-is:          Main.hs
-
+    other-modules:    Lexer
     -- Modules included in this executable, other than Main.
     -- other-modules:
 
@@ -68,7 +68,7 @@ executable QuantumCircuitDescriptionLanguage
     -- other-extensions:
 
     -- Other library packages from which modules are imported.
-    build-depends:    base ^>=4.18.2.1, parsec >= 3.1 && < 4
+    build-depends:    base ^>=4.18.2.1, parsec >= 3.1 && < 4, megaparsec
 
     -- Directories containing source files.
     hs-source-dirs:   app

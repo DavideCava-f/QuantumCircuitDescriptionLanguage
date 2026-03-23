@@ -1,32 +1,20 @@
 module Main where
 
-import Text.Megaparsec -- Qui c'è la funzione 'parse' corretta
-import Text.Megaparsec.Char
-import qualified Text.Megaparsec.Char.Lexer as L
-import Data.Void
-import Lexer
+import Text.Parsec
+import Text.Parsec.String
+import Text.Parsec.Char
+import Text.Parsec.Combinator
 
-type Name = String
-
-data Type = TBit | TQbit | TFun Type Type | TPair Type Type
+data N
+  = LitInt Int
+  | Var String
+  | Add N N
+  | Mul N N
+  | Let String N N
   deriving (Eq, Show)
 
-data Term 
-  = App Term Term
-  | Let Name Term Term
-  | Decomp Name Name Term Term  -- let <x,y> = t in t
-  | If Term Term Term
-  | Gate String [Term]          -- Per U(v1...vn) come H, X, CNOT
-  deriving (Show)
+type Prog = [N]
 
-
-data Value
-  = Var Name
-  | Lambda Name Type Term
-  | Pair Term Term
-  deriving (Show)
-
-{-
 ---Parsing Atomi
 intParser :: Parser N
 intParser = do
@@ -48,6 +36,7 @@ varParser = do
 atomParser :: Parser N
 atomParser = try intParser <|> varParser
 
+-----
 
 
 parensParser :: Parser N
@@ -89,14 +78,12 @@ letParser = do
 
 exprParser :: Parser N
 exprParser = try letParser <|> try parensParser <|> atomParser
--}
-
 
 main :: IO ()
 main = do
     putStrLn "Inserisci l'espressione try :((l*4) + (let x = 3 in (x\t+2)))"
     input <- getLine
-    case Text.Megaparsec.runParser lexerTest "" input of
-        Left err  -> putStrLn (errorBundlePretty err) -- Megaparsec usa errorBundlePretty, non show
-        Right res -> print res
+    case parse exprParser "" input of
+        Left err  -> putStrLn ("Errore di parsing:\n" ++ show err)
+        Right res -> putStrLn ("Input parsato:\n" ++ show res)
 

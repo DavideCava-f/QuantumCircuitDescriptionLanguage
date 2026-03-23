@@ -63,8 +63,64 @@ qtype       ::= "Qubit"
 
               | "Bit" 
 
-              | "(" qtype "->" qtype ")"
- -}
+              | "(" qtype "to" qtype ")"
+
+Quanto sono importanti i tipi, quali devo mettere?
+Lo spazio di nomi come lo devo gestire?
+Perche usare coppie di \otimes al posto di sequenze, \otimes non si usa per sistemi indipendenti?
+
+T:: bit qbit T to T T tensor t
+
+termini = applicazioni di temini(vv) let x = t in t | let <x,y>=t(tensore) in t
+
+valori variabili labdax.t coppie valori
+
+if v thent else t unica cosa per i bit
+
+U(v1...vn), U sta nelle gates e misura
+
+Regola di tipo 
+
+derivo statement t ha un tipo tau. ogni variabile viene con un suo tipo
+
+Assunzine che ogni variabile abbia il loro tipo
+
+Controllo di linearita
+    Non posso utilizzare una variabile in 2 spazi del trminae
+    Cattura il principio di no clonig tipo ineare
+
+Algoritmo type checking
+    Analizzo da come viaggiano i dati
+
+i valri sono termini
+
+Tipo di una funzione, do ad un termine un tipo, in Haskell posso fare una funzione con tipo e ogni termine ha il su tipo
+
+tensoriale
+
+il doppio let, non possiamo ocnsiderare una parte sola di una coppia, non si puo far comparire x due volte
+
+nel let dichiaro sempre il tipo
+
+Compiling lambda terms into quantum
+
+Materiale su internet, lambda calcolo lineare o quantistico
+
+vw 2 valori applixazione di una funzione a un argomento
+
+Pattern, algorito doic, dove f non e nota, utilizzo di funzioni di ordine superiore per maggiore modularita
+
+Applicazione come prototipo che deve esser valut applicata ad argomento non sia tra i valori, importante
+
+x funzione senza nome, 
+
+
+let entangle = lambda q1 : Qbit -> lambda q2 : QBit  -> CX q1 q2
+in 
+        entangle let q_1 = new Qubit(...) in H q_1 let q_2 = new Qubit(...) in H q_2  
+
+
+-}
 
 
 letParser :: Parser N
