@@ -1,0 +1,11 @@
+/*
+ if M(q2) 
+     then
+        let hada : (qbit -> qbit) = \x : qbit. H(x) in hada q1
+     else
+        let hada :(qbit -> qbit) =\x : qbit. X(x) in hada q2  
+*/
+
+let bellPrep : qbit -> qbit -> qbit = 
+    \a : qbit. \b : qbit. CNOT(H(a), H(b)) 
+in bellPrep q1 q2

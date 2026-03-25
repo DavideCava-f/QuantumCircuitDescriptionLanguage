@@ -1,5 +1,6 @@
 module Main where
 
+import Text.Pretty.Simple (pPrint)
 import Text.Megaparsec
 import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
@@ -14,9 +15,9 @@ data Type = TBit | TQbit | TFun Type Type | TPair Type Type
 
 data Term 
   = App Term Term -- H(x) CNOT(x,y) 
-  | Let Name Term Term -- let x = q1 in H(x)
+  | Let Name Type Term Term -- let x = q1 in H(x)
   | Decomp Name Name Term Term  -- let <x,y> = t in t
-  | If Value Term Term
+  | If Term Term Term
   | Gate String [Term]          -- Per U(v1...vn) come H, X, CNOT
   | V Value
   deriving (Show)
@@ -24,7 +25,7 @@ data Term
 
 data Value
   = Var Name
-  | Lambda Name Term
+  | Lambda Name Type Term
   | Pair Term Term
   deriving (Show)
 -- Parsing Dei tipi
@@ -57,11 +58,13 @@ letParser :: Parser Term
 letParser = do
     rWord "let"
     v <- identifier
+    colon
+    tipo <- pType
     equal 
     t1 <- termParser  
     rWord "in"
     t2 <- termParser
-    return(Let v t1 t2)
+    return(Let v tipo t1 t2)
 
 decompParser :: Parser Term
 decompParser = do
@@ -80,7 +83,7 @@ decompParser = do
 ifParser :: Parser Term
 ifParser = do
     rWord "if"
-    v <- valueParser
+    v <- termParser
     rWord "then"
     t1 <- termParser
     rWord "else"
@@ -138,9 +141,11 @@ lambdaParser :: Parser Value
 lambdaParser = do
     lambda
     x <- identifier
+    colon
+    tipo <- pType
     dot
     t <- termParser
-    return(Lambda x t)
+    return(Lambda x tipo t)
 
 pairParser :: Parser Value
 pairParser = do
@@ -165,10 +170,11 @@ mainParser = sc *> termParser <* eof
 
 main :: IO ()
 main = do
+    contenuto <- readFile "esempio.qqdc"
     let try = "let sup = \\f.\\x. let y = H(x) in let z = f y in H(z) in sup q" 
     putStrLn("Prova:" ++ try)
-    input <- getLine
-    case Text.Megaparsec.runParser mainParser "" input of
+    --input <- getLine
+    case Text.Megaparsec.runParser mainParser "" contenuto of
         Left err  -> putStrLn (errorBundlePretty err) 
-        Right res -> print res
+        Right res -> pPrint {-- putStrLn --} res
 
