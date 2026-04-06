@@ -6,28 +6,8 @@ import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
 import Data.Void
 import Lexer
+import TypeTree
 
-type Name = String
-
-data Type = TBit | TQbit | TFun Type Type | TPair Type Type
-  deriving (Eq, Show)
-
-
-data Term 
-  = App Term Term -- H(x) CNOT(x,y) 
-  | Let Name Type Term Term -- let x = q1 in H(x)
-  | Decomp Name Name Term Term  -- let <x,y> = t in t
-  | If Term Term Term
-  | Gate String [Term]          -- Per U(v1...vn) come H, X, CNOT
-  | V Value
-  deriving (Show)
-
-
-data Value
-  = Var Name
-  | Lambda Name Type Term
-  | Pair Term Term
-  deriving (Show)
 -- Parsing Dei tipi
 pTypeAtom :: Parser Type
 pTypeAtom = 
@@ -43,7 +23,7 @@ pType = do
       t2 <- pType 
       return (TFun t1 t2)
    <|> do 
-      symbol "⊗" -- o "*" 
+      tensor 
       t2 <- pType 
       return (TPair t1 t2)
    <|> return t1) 
@@ -167,14 +147,14 @@ varParser = do
 mainParser :: Parser Term
 mainParser = sc *> termParser <* eof 
 
-
 main :: IO ()
 main = do
     contenuto <- readFile "esempio.qqdc"
-    let try = "let sup = \\f.\\x. let y = H(x) in let z = f y in H(z) in sup q" 
-    putStrLn("Prova:" ++ try)
-    --input <- getLine
     case Text.Megaparsec.runParser mainParser "" contenuto of
-        Left err  -> putStrLn (errorBundlePretty err) 
-        Right res -> pPrint {-- putStrLn --} res
-
+        Left err -> putStrLn $ "Errore di Sintassi: " ++ show err
+        Right ast -> do
+            pPrint ast
+            let initialCtx = [("q1", TQbit), ("q2", TQbit), ("q3", TQbit)]
+            case annotate initialCtx ast of
+                Left typeErr -> putStrLn $ "Errore di Tipo/Linearità: " ++ typeErr
+                Right (typedAST, remainingCtx) -> pPrint typedAST

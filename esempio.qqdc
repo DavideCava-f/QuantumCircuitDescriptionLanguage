@@ -1,162 +1,120 @@
 
-/* Programma1--------------------- Riga 219 Articolo
- if M(q2) 
-     then
-        \f:(qbit -> qbit).\g:(qbit -> qbit).\x : qbit. f (g x)
-     else
-        \f:(qbit -> qbit).\g:(qbit -> qbit).\x : qbit. g (f x)
 
-Albero1------------------------------
-If
-    ( Gate "M"
+//let f : qbit -> qbit = \x : qbit .H(x) in f q2
+
+//let x : qbit = H(q1) in CNOT(x,q2)
+
+/* Primo Programma, (Da debuggare)
+let g : qbit -> qbit = \x : qbit. X(x) in
+let m : ((qbit -> qbit) -> qbit) -> qbit = 
+    \f : (qbit -> qbit). \x : qbit.
+        let y : qbit = H(x) in
+        let z : qbit = f y in
+        H(z)
+in
+    m g q1
+
+
+------------------------ Programma con decomp
+let p: (qbit * qbit) = CNOT(q1,q2) in 
+
+let <a,b> = p in 
+
+CNOT(H(a),H(b))
+
+------ AST
+Let "p" ( TPair TQbit TQbit )
+    ( Gate "CNOT"
         [ V
+            ( Var "q1" )
+        , V
             ( Var "q2" )
         ]
     )
-    ( V
-        ( Lambda "f" ( TFun TQbit TQbit )
-            ( V
-                ( Lambda "g" ( TFun TQbit TQbit )
-                    ( V
-                        ( Lambda "x" TQbit
-                            ( App
-                                ( V
-                                    ( Var "f" )
-                                )
-                                ( App
-                                    ( V
-                                        ( Var "g" )
-                                    )
-                                    ( V
-                                        ( Var "x" )
-                                    )
-                                )
-                            )
-                        )
-                    )
-                )
-            )
+    ( Decomp "a" "b"
+        ( V
+            ( Var "p" )
+        )
+        ( Gate "CNOT"
+            [ Gate "H"
+                [ V
+                    ( Var "a" )
+                ]
+            , Gate "H"
+                [ V
+                    ( Var "b" )
+                ]
+            ]
         )
     )
-    ( V
-        ( Lambda "f" ( TFun TQbit TQbit )
-            ( V
-                ( Lambda "g" ( TFun TQbit TQbit )
-                    ( V
-                        ( Lambda "x" TQbit
-                            ( App
-                                ( V
-                                    ( Var "g" )
-                                )
-                                ( App
-                                    ( V
-                                        ( Var "f" )
-                                    )
-                                    ( V
-                                        ( Var "x" )
-                                    )
-                                )
-                            )
-                        )
-                    )
-                )
-            )
-        )
+----- TypedAST
+TLet "p" ( TPair TQbit TQbit )
+    ( TGate "CNOT"
+        [ TV
+            ( Var "q1" ) TQbit
+        , TV
+            ( Var "q2" ) TQbit
+        ] ( TPair TQbit TQbit )
     )
------------------Fine ProgrammaAlbero1
-------------------Programma2----Riga 384 Articolo
+    ( TDecomp "a" "b"
+        ( TV
+            ( Var "p" ) ( TPair TQbit TQbit )
+        )
+        ( TGate "CNOT"
+            [ TGate "H"
+                [ TV
+                    ( Var "a" ) TQbit
+                ] TQbit
+            , TGate "H"
+                [ TV
+                    ( Var "b" ) TQbit
+                ] TQbit
+            ] ( TPair TQbit TQbit )
+        ) ( TPair TQbit TQbit )
+    ) ( TPair TQbit TQbit )
 
-(\f:(qbit -> qbit).\x: qbit .CNOT(<f x, new(Zero)>)) (H(new(Zero)))
+--------------------------- Programma con lambdas
+let f : qbit -> qbit = \x : qbit .H(x) in X(f q2)
 
----------------------Albero2
-App
+-----AST
+Let "f" ( TFun TQbit TQbit )
     ( V
-        ( Lambda "f" ( TFun TQbit TQbit )
-            ( V
-                ( Lambda "x" TQbit
-                    ( App
-                        ( V
-                            ( Var "CNOT" )
-                        )
-                        ( V
-                            ( Pair
-                                ( App
-                                    ( V
-                                        ( Var "f" )
-                                    )
-                                    ( V
-                                        ( Var "x" )
-                                    )
-                                )
-                                ( App
-                                    ( V
-                                        ( Var "new" )
-                                    )
-                                    ( V
-                                        ( Var "Zero" )
-                                    )
-                                )
-                            )
-                        )
-                    )
-                )
+        ( Lambda "x" TQbit
+            ( Gate "H"
+                [ V
+                    ( Var "x" )
+                ]
             )
         )
     )
-    ( Gate "H"
+    ( Gate "X"
         [ App
             ( V
-                ( Var "new" )
+                ( Var "f" )
             )
             ( V
-                ( Var "Zero" )
+                ( Var "q2" )
             )
         ]
     )
----------------FineProgrammaAlbero2
-
-
---------Programma3 Esempio ordine superiore
-
-
-\f : (qbit -> qbit). \x : qbit.
-    let y : qbit = H(x) in
-        let z : qbit = f y in
-            H(z)
-
------Albero3------------------
-
-V
-    ( Lambda "f" ( TFun TQbit TQbit )
-        ( V
-            ( Lambda "x" TQbit
-                ( Let "y" TQbit
-                    ( Gate "H"
-                        [ V
-                            ( Var "x" )
-                        ]
-                    )
-                    ( Let "z" TQbit
-                        ( App
-                            ( V
-                                ( Var "f" )
-                            )
-                            ( V
-                                ( Var "y" )
-                            )
-                        )
-                        ( Gate "H"
-                            [ V
-                                ( Var "z" )
-                            ]
-                        )
-                    )
-                )
+----Typed AST
+TLet "f" ( TFun TQbit TQbit )
+    ( TV
+        ( Lambda "x" TQbit
+            ( Gate "H"
+                [ V
+                    ( Var "x" )
+                ]
             )
-        )
+        ) ( TFun TQbit TQbit )
     )
-
-*/
-
-
-
+    ( TGate "X"
+        [ TApp
+            ( TV
+                ( Var "f" ) ( TFun TQbit TQbit )
+            )
+            ( TV
+                ( Var "q2" ) TQbit
+            ) TQbit
+        ] TQbit
+    ) TQbit

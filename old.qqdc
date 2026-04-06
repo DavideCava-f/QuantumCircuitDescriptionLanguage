@@ -1,0 +1,162 @@
+
+/*
+ if M(q2) 
+     then
+        \f:(qbit -> qbit).\g:(qbit -> qbit).\x : qbit. f (g x)
+     else
+        \f:(qbit -> qbit).\g:(qbit -> qbit).\x : qbit. g (f x)
+Albero1------------------------------
+If
+    ( Gate "M"
+        [ V
+            ( Var "q2" )
+        ]
+    )
+    ( V
+        ( Lambda "f" ( TFun TQbit TQbit )
+            ( V
+                ( Lambda "g" ( TFun TQbit TQbit )
+                    ( V
+                        ( Lambda "x" TQbit
+                            ( App
+                                ( V
+                                    ( Var "f" )
+                                )
+                                ( App
+                                    ( V
+                                        ( Var "g" )
+                                    )
+                                    ( V
+                                        ( Var "x" )
+                                    )
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+        )
+    )
+    ( V
+        ( Lambda "f" ( TFun TQbit TQbit )
+            ( V
+                ( Lambda "g" ( TFun TQbit TQbit )
+                    ( V
+                        ( Lambda "x" TQbit
+                            ( App
+                                ( V
+                                    ( Var "g" )
+                                )
+                                ( App
+                                    ( V
+                                        ( Var "f" )
+                                    )
+                                    ( V
+                                        ( Var "x" )
+                                    )
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+        )
+    )
+-----------------Fine ProgrammaAlbero1
+------------------Programma2----Riga 384 Articolo
+
+(\f:(qbit -> qbit).\x: qbit .CNOT(<f x, new(Zero)>)) (H(new(Zero)))
+
+---------------------Albero2
+App
+    ( V
+        ( Lambda "f" ( TFun TQbit TQbit )
+            ( V
+                ( Lambda "x" TQbit
+                    ( App
+                        ( V
+                            ( Var "CNOT" )
+                        )
+                        ( V
+                            ( Pair
+                                ( App
+                                    ( V
+                                        ( Var "f" )
+                                    )
+                                    ( V
+                                        ( Var "x" )
+                                    )
+                                )
+                                ( App
+                                    ( V
+                                        ( Var "new" )
+                                    )
+                                    ( V
+                                        ( Var "Zero" )
+                                    )
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+        )
+    )
+    ( Gate "H"
+        [ App
+            ( V
+                ( Var "new" )
+            )
+            ( V
+                ( Var "Zero" )
+            )
+        ]
+    )
+---------------FineProgrammaAlbero2
+
+--------Programma3 Esempio ordine superiore
+\f : (qbit -> qbit). \x : qbit.
+    let y : qbit = H(x) in
+        let z : qbit = f y in
+            H(z)
+
+-----Albero3------------------
+
+V
+    ( Lambda "f" ( TFun TQbit TQbit )
+        ( V
+            ( Lambda "x" TQbit
+                ( Let "y" TQbit
+                    ( Gate "H"
+                        [ V
+                            ( Var "x" )
+                        ]
+                    )
+                    ( Let "z" TQbit
+                        ( App
+                            ( V
+                                ( Var "f" )
+                            )
+                            ( V
+                                ( Var "y" )
+                            )
+                        )
+                        ( Gate "H"
+                            [ V
+                                ( Var "z" )
+                            ]
+                        )
+                    )
+                )
+            )
+        )
+    )
+
+let f : qbit -> qbit = \x.H(x) in f q2
+
+let x = H(q1) in CNOT(x,q2)
+*/
+
+
+
+
