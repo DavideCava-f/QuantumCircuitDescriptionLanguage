@@ -1,10 +1,11 @@
 module TypeTree where
 
+import Data.List (sort)
+
 type Name = String
 
 data Type = TBit | TQbit | TFun Type Type | TPair Type Type
   deriving (Eq, Show)
-
 
 data Term 
   = App Term Term -- H(x) CNOT(x,y) 
@@ -88,6 +89,30 @@ annotate ctx term = case term of
             _ -> Left "Mismatch di tipi nell'applicazione della funzione."
 
 
+    --6 IF
+    If cond termThen termElse -> do
+        (tCond, ctx1) <- annotate ctx cond 
+        if getTType tCond /= TBit -- Solo Bit(Solo measures)
+            then Left "Errore: la condizione dell'IF deve essere un Bit."
+            else do
+                -- Analizzo THEN
+                (tThen, ctxThen) <- annotate ctx1 termThen
+                
+                -- Analizzo ELSE
+                (tElse, ctxElse) <- annotate ctx1 termElse
+                
+                -- I contesti devono essere uguali(altrimenti incoerenza con cio' che viene eseguito dopo)
+                -- Per ora da considerarsi una patch
+                if ctxThen /= ctxElse
+                    then Left "Errore di linearità: i due rami dell'IF consumano risorse diverse."
+                    else do
+                        -- 5. Il tipo dell'IF e' il tipo dei rami (che deve essere lo stesso per motivi analoghi)
+                        let tyThen = getTType tThen
+                        let tyElse = getTType tElse
+                        if tyThen /= tyElse
+                            then Left "Errore: i rami dell'IF restituiscono tipi diversi."
+                            else return (TIf tCond tThen tElse tyThen, ctxThen)
+
 type Context = [(Name, Type)]
 
 --Per esempio nei Values consuma il simbolo
@@ -117,6 +142,8 @@ getTType (TApp _ _ t) = t
 getTType (TGate _ _ t) = t
 getTType (TLet _ _ _ _ t) = t
 getTType (TDecomp _ _ _ _ t) = t
+getTType (TIf _ _ _ t) = t
+getTType x = error $ "Pattern mancante in getTType: " ++ show x
 
 --Controllo di tipi nei gates
 checkGate :: String -> [Type] -> Either String Type

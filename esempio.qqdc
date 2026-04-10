@@ -5,14 +5,129 @@
 //let x : qbit = H(q1) in CNOT(x,q2)
 
 /* Primo Programma, (Da debuggare)
-let g : qbit -> qbit = \x : qbit. X(x) in
-let m : ((qbit -> qbit) -> qbit) -> qbit = 
-    \f : (qbit -> qbit). \x : qbit.
+
+let g : qbit -> qbit = \a : qbit. X(a) in
+let m : (qbit -> qbit) -> (qbit -> qbit) = 
+    \f : qbit -> qbit. \x : qbit.
         let y : qbit = H(x) in
         let z : qbit = f y in
-        H(z)
-in
-    m g q1
+        H(z) 
+in m g q1
+
+Let "g" ( TFun TQbit TQbit )
+    ( V
+        ( Lambda "a" TQbit
+            ( Gate "X"
+                [ V
+                    ( Var "a" )
+                ]
+            )
+        )
+    )
+    ( Let "m"
+        ( TFun ( TFun TQbit TQbit ) ( TFun TQbit TQbit ) )
+        ( V
+            ( Lambda "f" ( TFun TQbit TQbit )
+                ( V
+                    ( Lambda "x" TQbit
+                        ( Let "y" TQbit
+                            ( Gate "H"
+                                [ V
+                                    ( Var "x" )
+                                ]
+                            )
+                            ( Let "z" TQbit
+                                ( App
+                                    ( V
+                                        ( Var "f" )
+                                    )
+                                    ( V
+                                        ( Var "y" )
+                                    )
+                                )
+                                ( Gate "H"
+                                    [ V
+                                        ( Var "z" )
+                                    ]
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+        )
+        ( App
+            ( App
+                ( V
+                    ( Var "m" )
+                )
+                ( V
+                    ( Var "g" )
+                )
+            )
+            ( V
+                ( Var "q1" )
+            )
+        )
+    )
+TLet "g" ( TFun TQbit TQbit )
+    ( TV
+        ( Lambda "a" TQbit
+            ( Gate "X"
+                [ V
+                    ( Var "a" )
+                ]
+            )
+        ) ( TFun TQbit TQbit )
+    )
+    ( TLet "m"
+        ( TFun ( TFun TQbit TQbit ) ( TFun TQbit TQbit ) )
+        ( TV
+            ( Lambda "f" ( TFun TQbit TQbit )
+                ( V
+                    ( Lambda "x" TQbit
+                        ( Let "y" TQbit
+                            ( Gate "H"
+                                [ V
+                                    ( Var "x" )
+                                ]
+                            )
+                            ( Let "z" TQbit
+                                ( App
+                                    ( V
+                                        ( Var "f" )
+                                    )
+                                    ( V
+                                        ( Var "y" )
+                                    )
+                                )
+                                ( Gate "H"
+                                    [ V
+                                        ( Var "z" )
+                                    ]
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+            ( TFun ( TFun TQbit TQbit ) ( TFun TQbit TQbit ) )
+        )
+        ( TApp
+            ( TApp
+                ( TV
+                    ( Var "m" )
+                    ( TFun ( TFun TQbit TQbit ) ( TFun TQbit TQbit ) )
+                )
+                ( TV
+                    ( Var "g" ) ( TFun TQbit TQbit )
+                ) ( TFun TQbit TQbit )
+            )
+            ( TV
+                ( Var "q1" ) TQbit
+            ) TQbit
+        ) TQbit
+    ) TQbit
 
 
 ------------------------ Programma con decomp
@@ -118,3 +233,41 @@ TLet "f" ( TFun TQbit TQbit )
             ) TQbit
         ] TQbit
     ) TQbit
+
+
+if M(q1) then X(q2) else H(q2)
+
+If
+    ( Gate "M"
+        [ V
+            ( Var "q1" )
+        ]
+    )
+    ( Gate "X"
+        [ V
+            ( Var "q2" )
+        ]
+    )
+    ( Gate "H"
+        [ V
+            ( Var "q2" )
+        ]
+    )
+TIf
+    ( TGate "M"
+        [ TV
+            ( Var "q1" ) TQbit
+        ] TBit
+    )
+    ( TGate "X"
+        [ TV
+            ( Var "q2" ) TQbit
+        ] TQbit
+    )
+    ( TGate "H"
+        [ TV
+            ( Var "q2" ) TQbit
+        ] TQbit
+    ) TQbit
+*/
+
