@@ -5,11 +5,55 @@
 //let x : qbit = H(q1) in CNOT(x,q2)
 
 //let y : (qbit * qbit) = let x : qbit = H(q1) in CNOT(x,q2) in let <a,b> = y in H(a)
+
+/* Primo Programma
 \x: (qbit * qbit). let <y,z> = x in <z,y>
 
+---AST
+V
+    ( Lambda "x" ( TPair TQbit TQbit )
+        ( Decomp "y" "z"
+            ( V
+                ( Var "x" )
+            )
+            ( V
+                ( Pair
+                    ( V
+                        ( Var "z" )
+                    )
+                    ( V
+                        ( Var "y" )
+                    )
+                )
+            )
+        )
+    )
+------TypedAST
+TV
+    ( Lambda "x" ( TPair TQbit TQbit )
+        ( Decomp "y" "z"
+            ( V
+                ( Var "x" )
+            )
+            ( V
+                ( Pair
+                    ( V
+                        ( Var "z" )
+                    )
+                    ( V
+                        ( Var "y" )
+                    )
+                )
+            )
+        )
+    )
+    ( TFun ( TPair TQbit TQbit ) ( TPair TQbit TQbit ) )
 
 
-/* Primo Programma, (Da debuggare)
+
+
+
+
 
 let g : qbit -> qbit = \a : qbit. X(a) in
 let m : (qbit -> qbit) -> (qbit -> qbit) = 

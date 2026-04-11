@@ -4,7 +4,7 @@ import Data.List (sort)
 
 type Name = String
 
-data Type = TBit | TQbit | TFun Type Type | TyPair Type Type
+data Type = TBit | TQbit | TFun Type Type | TPair Type Type
   deriving (Eq, Show)
 
 data Term 
@@ -24,7 +24,7 @@ data Value
   deriving (Show)
 
 data TypedTerm
-  = TV TypedValue --In caso non funzioni o non vada bene ritorno a TV Value Type
+  = TV Value Type
   | TApp TypedTerm TypedTerm Type
   | TGate String [TypedTerm] Type
   | TLet Name Type TypedTerm TypedTerm Type
@@ -32,11 +32,6 @@ data TypedTerm
   | TIf TypedTerm TypedTerm TypedTerm Type
   deriving (Show)
 
-data TypedValue
-  = TVar Name Type
-  | TLambda Name Type TypedTerm  
-  | TVPair TypedTerm TypedTerm    
-  deriving (Show)
 
 annotate :: Context -> Term -> Either String (TypedTerm, Context)
 annotate ctx term = case term of
@@ -46,21 +41,21 @@ annotate ctx term = case term of
         -- Controlla variabile (es. q1, f, x)
         Var x -> do
             (ty, newCtx) <- lookupAndConsume x ctx
-            return (TV (TVar x ty), newCtx)
+            return (TV (Var x) ty, newCtx)
         
         -- Lambdas, aggiungo al contesto e entro nel body 
         Lambda x tyArg body -> do
             (tBody, _) <- annotate ((x, tyArg) : ctx) body
             let lamTy = TFun tyArg (getTType tBody)
-            return (TV (TLambda x tyArg body lamTy), ctx)
-
+            return (TV (Lambda x tyArg body) lamTy, ctx)
+        -- Pairs, trovo i typed terms calcolo il tipo e ritorno
         Pair t1 t2 -> do
                     (tt1, ctx1) <- annotate ctx t1
                     (tt2, ctx2) <- annotate ctx1 t2
                     
-                    let pairTy = TyPair (getTType tt1) (getTType tt2)
+                    let pairTy = TPair (getTType tt1) (getTType tt2)
                     
-                    return (TV (TVPair tt1 tt2) pairTy, ctx2)
+                    return (TV (Pair t1 t2) pairTy, ctx2)
     -- 2. GATE: Esegue il controllo sugli argomenti in sequenza, il CNOT ne ha due ma scalabile(forse puo' servire)
     Gate name args -> do
         -- Funzione helper che processa la lista di argomenti
@@ -84,7 +79,7 @@ annotate ctx term = case term of
     Decomp x y t1 t2 -> do
         (tt1, ctx1) <- annotate ctx t1
         case getTType tt1 of
-            TyPair tx ty -> do
+            TPair tx ty -> do
                 -- Aggiungiamo x e y al contesto
                 (tt2, ctx2) <- annotate ((x, tx) : (y, ty) : ctx1) t2
                 -- Pulizia: x e y non devono uscire dal Decomp
@@ -132,7 +127,7 @@ type Context = [(Name, Type)]
 lookupAndConsume :: Name -> Context -> Either String (Type, Context)
 lookupAndConsume x [] = Left $ "Errore di linearità: variabile '" ++ x ++ "' non trovata o già usata."
 lookupAndConsume x ((n, t):xs)
-  | x == n    = Right (t, xs) -- Trovata! La restituiamo insieme al resto del contesto
+  | x == n    = Right (t, xs) 
   | otherwise = do
       (t', rest) <- lookupAndConsume x xs
       Right (t', (n, t) : rest)
@@ -168,7 +163,6 @@ checkGate name args = case (name, args) of
     ("T", [TQbit])    -> Right TQbit
 
     -- Gate a 2 Qubit (CNOT)
-    -- Se il CNOT restituisce i due qubit "aggiornati" come coppia:
     ("CNOT", [TQbit, TQbit]) -> Right (TPair TQbit TQbit)
 
     -- Gate di Misura (trasforma Qbit in Bit classico)
