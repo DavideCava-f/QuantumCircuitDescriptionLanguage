@@ -4,6 +4,11 @@
 
 //let x : qbit = H(q1) in CNOT(x,q2)
 
+//let y : (qbit * qbit) = let x : qbit = H(q1) in CNOT(x,q2) in let <a,b> = y in H(a)
+\x: (qbit * qbit). let <y,z> = x in <z,y>
+
+
+
 /* Primo Programma, (Da debuggare)
 
 let g : qbit -> qbit = \a : qbit. X(a) in

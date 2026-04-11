@@ -25,7 +25,7 @@ pType = do
    <|> do 
       tensor 
       t2 <- pType 
-      return (TPair t1 t2)
+      return (TyPair t1 t2)
    <|> return t1) 
 
 --------

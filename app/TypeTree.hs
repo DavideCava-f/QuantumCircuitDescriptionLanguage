@@ -4,7 +4,7 @@ import Data.List (sort)
 
 type Name = String
 
-data Type = TBit | TQbit | TFun Type Type | TPair Type Type
+data Type = TBit | TQbit | TFun Type Type | TyPair Type Type
   deriving (Eq, Show)
 
 data Term 
@@ -24,12 +24,18 @@ data Value
   deriving (Show)
 
 data TypedTerm
-  = TV Value Type
+  = TV TypedValue --In caso non funzioni o non vada bene ritorno a TV Value Type
   | TApp TypedTerm TypedTerm Type
   | TGate String [TypedTerm] Type
   | TLet Name Type TypedTerm TypedTerm Type
   | TDecomp Name Name TypedTerm TypedTerm Type
   | TIf TypedTerm TypedTerm TypedTerm Type
+  deriving (Show)
+
+data TypedValue
+  = TVar Name Type
+  | TLambda Name Type TypedTerm  
+  | TVPair TypedTerm TypedTerm    
   deriving (Show)
 
 annotate :: Context -> Term -> Either String (TypedTerm, Context)
@@ -40,14 +46,21 @@ annotate ctx term = case term of
         -- Controlla variabile (es. q1, f, x)
         Var x -> do
             (ty, newCtx) <- lookupAndConsume x ctx
-            return (TV (Var x) ty, newCtx)
+            return (TV (TVar x ty), newCtx)
         
         -- Lambdas, aggiungo al contesto e entro nel body 
         Lambda x tyArg body -> do
             (tBody, _) <- annotate ((x, tyArg) : ctx) body
             let lamTy = TFun tyArg (getTType tBody)
-            return (TV (Lambda x tyArg body) lamTy, ctx)
+            return (TV (TLambda x tyArg body lamTy), ctx)
 
+        Pair t1 t2 -> do
+                    (tt1, ctx1) <- annotate ctx t1
+                    (tt2, ctx2) <- annotate ctx1 t2
+                    
+                    let pairTy = TyPair (getTType tt1) (getTType tt2)
+                    
+                    return (TV (TVPair tt1 tt2) pairTy, ctx2)
     -- 2. GATE: Esegue il controllo sugli argomenti in sequenza, il CNOT ne ha due ma scalabile(forse puo' servire)
     Gate name args -> do
         -- Funzione helper che processa la lista di argomenti
@@ -62,7 +75,7 @@ annotate ctx term = case term of
         (tVal, ctx1) <- annotate ctx val
         -- Aggiungiamo x al contesto per il controllo del corpo
         (tBody, ctx2) <- annotate ((x, ty) : ctx1) body
-        -- Verifichiamo che x sia stato consumato (opzionale, dipende dalla tua logica lineare)
+        -- Verifichiamo che x sia stato consumato (opzionale, dipende dalla logica lineare)
         if any ((== x) . fst) ctx2
             then Left $ "Errore: la variabile lineare '" ++ x ++ "' deve essere consumata nel corpo."
             else return (TLet x ty tVal tBody (getTType tBody), ctx2)
@@ -71,7 +84,7 @@ annotate ctx term = case term of
     Decomp x y t1 t2 -> do
         (tt1, ctx1) <- annotate ctx t1
         case getTType tt1 of
-            TPair tx ty -> do
+            TyPair tx ty -> do
                 -- Aggiungiamo x e y al contesto
                 (tt2, ctx2) <- annotate ((x, tx) : (y, ty) : ctx1) t2
                 -- Pulizia: x e y non devono uscire dal Decomp
