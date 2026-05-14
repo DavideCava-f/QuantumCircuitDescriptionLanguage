@@ -7,6 +7,7 @@ import qualified Text.Megaparsec.Char.Lexer as L
 import Data.Void
 import Lexer
 import TypeTree
+import CircuitGraph
 
 -- Parsing Dei tipi
 pTypeAtom :: Parser Type
@@ -82,6 +83,7 @@ gateParser = do
     name <- identifier 
     case name of
         "CNOT" -> do
+
             args <- parens $ do
                 t1 <- termParser
                 comma
@@ -92,7 +94,7 @@ gateParser = do
         "H" -> oneArgGate name
         "X" -> oneArgGate name
         "M" -> oneArgGate name
-        
+
         _ -> fail $ "Unknown gate: " ++ name
 
 oneArgGate :: String -> Parser Term
@@ -134,7 +136,7 @@ pairParser = do
         comma
         v2 <- termParser
         return (v1, v2)
-    return(Pair i1 i2)
+    return(Tensor i1 i2)
 
 
 varParser :: Parser Value
@@ -157,4 +159,11 @@ main = do
             let initialCtx = [("q1", TQbit), ("q2", TQbit), ("q3", TQbit)]
             case annotate initialCtx ast of
                 Left typeErr -> putStrLn $ "Errore di Tipo/Linearità: " ++ typeErr
-                Right (typedAST, remainingCtx) -> pPrint typedAST
+                Right (typedAST, remainingCtx) -> do
+                    pPrint typedAST
+                    let c = startGraphCreat typedAST in
+                        print c
+
+
+
+

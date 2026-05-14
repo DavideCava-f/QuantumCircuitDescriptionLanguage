@@ -20,11 +20,17 @@ data Term
 data Value
   = Var Name
   | Lambda Name Type Term
-  | Pair Term Term
+  | Tensor Term Term
+  deriving (Show)
+
+data TypedValue
+  = TVar Name Type
+  | TLambda Name Type TypedTerm Type  -- Lambda: arg, tipo_arg, corpo_tipizzato, tipo_totale
+  | TTensor TypedTerm TypedTerm Type    -- Coppia di due termini tipizzati
   deriving (Show)
 
 data TypedTerm
-  = TV Value Type
+  = TV TypedValue Type
   | TApp TypedTerm TypedTerm Type
   | TGate String [TypedTerm] Type
   | TLet Name Type TypedTerm TypedTerm Type
@@ -41,21 +47,21 @@ annotate ctx term = case term of
         -- Controlla variabile (es. q1, f, x)
         Var x -> do
             (ty, newCtx) <- lookupAndConsume x ctx
-            return (TV (Var x) ty, newCtx)
+            return (TV (TVar x ty) ty, newCtx)
         
         -- Lambdas, aggiungo al contesto e entro nel body 
         Lambda x tyArg body -> do
             (tBody, _) <- annotate ((x, tyArg) : ctx) body
             let lamTy = TFun tyArg (getTType tBody)
-            return (TV (Lambda x tyArg body) lamTy, ctx)
+            return (TV (TLambda x tyArg tBody lamTy) lamTy, ctx)
         -- Pairs, trovo i typed terms calcolo il tipo e ritorno
-        Pair t1 t2 -> do
+        Tensor t1 t2 -> do
                     (tt1, ctx1) <- annotate ctx t1
                     (tt2, ctx2) <- annotate ctx1 t2
                     
                     let pairTy = TPair (getTType tt1) (getTType tt2)
                     
-                    return (TV (Pair t1 t2) pairTy, ctx2)
+                    return (TV (TTensor tt1 tt2 pairTy) pairTy, ctx2)
     -- 2. GATE: Esegue il controllo sugli argomenti in sequenza, il CNOT ne ha due ma scalabile(forse puo' servire)
     Gate name args -> do
         -- Funzione helper che processa la lista di argomenti
@@ -161,6 +167,7 @@ checkGate name args = case (name, args) of
     ("X", [TQbit])    -> Right TQbit
     ("Z", [TQbit])    -> Right TQbit
     ("T", [TQbit])    -> Right TQbit
+    ("Y", [TQbit])    -> Right TQbit
 
     -- Gate a 2 Qubit (CNOT)
     ("CNOT", [TQbit, TQbit]) -> Right (TPair TQbit TQbit)

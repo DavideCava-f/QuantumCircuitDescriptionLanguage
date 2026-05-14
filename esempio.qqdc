@@ -320,3 +320,19 @@ TIf
     ) TQbit
 */
 
+
+//(\f : qbit -> qbit. \x : qbit * qbit. let <y,z> = x in <f (H(y)) , X(z)>) (\q : qbit. X(q))
+
+\y : (qbit * qbit).(let <z,x> = y in CNOT(z,x))
+
+//\x: qbit.H(x)
+
+
+/*let g : qbit -> qbit = \a : qbit. X(a) in
+let m : (qbit -> qbit) -> (qbit -> qbit) = 
+    \f : qbit -> qbit. \x : qbit.
+        let y : qbit = H(x) in
+        let z : qbit = f y in
+        H(z) 
+in m g
+*/
