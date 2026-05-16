@@ -86,6 +86,34 @@ visit tt wmap g = trace ("--- Entro in visit con: " ++ show tt) $ case tt of
             finalWmap = Map.delete x wmap2
         in (finalWmap, g2, outFinal)
 
+    TApp f arg _ ->
+        let (wmap1, g1, outArg) = visit arg wmap g
+            in case f of
+
+            -- Caso applico lambda
+                TV (TLambda x _ body _) _ ->
+                    let wmapWithArg = Map.insert x outArg wmap1
+                    in visit body wmapWithArg g1
+                    
+            -- Caso applico Var
+                TV (TVar name _) _ ->
+                    -- Creo nodi e archi
+                    let gateID = nextID g1
+                        newNodes = Map.insert gateID (QGate name) (nodes g1)
+                        
+                        sources = flattenOutcome outArg
+                        newEdges = [ Edge src (gateID, port) | (src, port) <- zip sources [0..] ]
+                        
+                        g2 = g1 { nodes = newNodes
+                                , edges = edges g1 ++ newEdges
+                                , nextID = gateID + 1 }
+                        
+                        -- Definizione uscita
+                        finalOutcome = case name of
+                            "CNOT" -> Pair (Single (gateID, 0)) (Single (gateID, 1))
+                            _      -> Single (gateID, 0)
+                    in (wmap1, g2, finalOutcome)
+
 visitValue :: TypedValue -> Type -> WireMap -> Graph -> (WireMap, Graph, Outcome)
 visitValue tv ty wmap g = case tv of
     TVar x _ -> 

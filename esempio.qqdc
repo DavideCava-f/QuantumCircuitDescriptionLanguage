@@ -167,6 +167,50 @@ TV
 --- Sources: [(2,0),(1,0)]
 --- Sources: [(3,0)]
 
+---------------------------------------------------------------------------
+--------------------- P5 (Program with application)
+
+---------------------- P5 AST
+TV
+    ( TLambda "q2" TQbit
+        ( TLet "f" ( TFun TQbit TQbit )
+            ( TV
+                ( TLambda "x" TQbit
+                    ( TGate "H"
+                        [ TV
+                            ( TVar "x" TQbit ) TQbit
+                        ] TQbit
+                    ) ( TFun TQbit TQbit )
+                ) ( TFun TQbit TQbit )
+            )
+            ( TGate "X"
+                [ TApp
+                    ( TV
+                        ( TVar "f" ( TFun TQbit TQbit ) ) ( TFun TQbit TQbit )
+                    )
+                    ( TV
+                        ( TVar "q2" TQbit ) TQbit
+                    ) TQbit
+                ] TQbit
+            ) TQbit
+        ) ( TFun TQbit TQbit )
+    ) ( TFun TQbit TQbit )
+
+---------------------P5 Graph
+(Graph {nodes = fromList [(0,InPort "q2"),(1,InPort "x"),(2,QGate "H"),(3,QGate "f"),(4,QGate "X")], edges = [Edge (1,0) (2,0),Edge (0,0) (3,0),Edge (3,0) (4,0)], nextID = 5},Single (4,0))
+
+---------------------P5 Debugging log
+--- Entro in visit con: TV (TLambda "q2" TQbit (TLet "f" (TFun TQbit TQbit) (TV (TLambda "x" TQbit (TGate "H" [TV (TVar "x" TQbit) TQbit] TQbit) (TFun TQbit TQbit)) (TFun TQbit TQbit)) (TGate "X" [TApp (TV (TVar "f" (TFun TQbit TQbit)) (TFun TQbit TQbit)) (TV (TVar "q2" TQbit) TQbit) TQbit] TQbit) TQbit) (TFun TQbit TQbit)) (TFun TQbit TQbit)
+--- Entro in visit con: TLet "f" (TFun TQbit TQbit) (TV (TLambda "x" TQbit (TGate "H" [TV (TVar "x" TQbit) TQbit] TQbit) (TFun TQbit TQbit)) (TFun TQbit TQbit)) (TGate "X" [TApp (TV (TVar "f" (TFun TQbit TQbit)) (TFun TQbit TQbit)) (TV (TVar "q2" TQbit) TQbit) TQbit] TQbit) TQbit
+--- Entro in visit con: TGate "X" [TApp (TV (TVar "f" (TFun TQbit TQbit)) (TFun TQbit TQbit)) (TV (TVar "q2" TQbit) TQbit) TQbit] TQbit
+--- Entro in visit con: TApp (TV (TVar "f" (TFun TQbit TQbit)) (TFun TQbit TQbit)) (TV (TVar "q2" TQbit) TQbit) TQbit
+--- Entro in visit con: TV (TVar "q2" TQbit) TQbit
+--- Entro in visit con: TV (TLambda "x" TQbit (TGate "H" [TV (TVar "x" TQbit) TQbit] TQbit) (TFun TQbit TQbit)) (TFun TQbit TQbit)
+--- Entro in visit con: TGate "H" [TV (TVar "x" TQbit) TQbit] TQbit
+--- Entro in visit con: TV (TVar "x" TQbit) TQbit
+--- Sources: [(1,0)]
+--- Sources: [(3,0)]
+
 */
 
 
