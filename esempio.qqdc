@@ -10,7 +10,7 @@ let m : (qbit -> qbit) -> (qbit -> qbit) =
         let y : qbit = H(x) in
         let z : qbit = f y in
         H(z) 
-in m g q1
+in m g
 
 
 ------------------------ Programma con decomp
@@ -34,7 +34,7 @@ if M(q1) then X(q2) else H(q2)
 
 /* Programs with graph
 ------ P1 
-\y : (qbit * qbit).(let <z,x> = y in CNOT(z,x))
+\y : (qbit * qbit).(let <z,x> = y in CNOT(x,z))
 
 ------ P1 AST
 TV
@@ -213,4 +213,10 @@ TV
 
 */
 
+//\y : qbit .let x : qbit = H(X(y)) in X(x)
+//\y: qbit. X(y)
+\z : (qbit * qbit).(let <k,x> = z in CNOT(x,k))
+
+
+//\f : qbit -> qbit. \x : qbit. H(f x)
 
