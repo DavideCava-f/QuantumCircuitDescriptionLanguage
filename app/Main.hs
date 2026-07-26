@@ -7,7 +7,7 @@ import qualified Text.Megaparsec.Char.Lexer as L
 import Data.Void
 import Lexer
 import TypeTree
-import CircuitGraph
+import CreateDerivation
 
 -- Parsing Dei tipi
 pTypeAtom :: Parser Type
@@ -161,8 +161,8 @@ main = do
                 Left typeErr -> putStrLn $ "Errore di Tipo/Linearità: " ++ typeErr
                 Right (typedAST, remainingCtx) -> do
                     pPrint typedAST
-                    let c = startGraphCreat typedAST in
-                        print c
+                    let c = startDerivation typedAST in
+                        printDerivation c
 
 
 
