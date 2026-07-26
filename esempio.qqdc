@@ -213,10 +213,10 @@ TV
 
 */
 
-//\y : qbit .let x : qbit = H(X(y)) in X(x)
+//\y : qbit .let x : qbit = H(y) in X(x)
 //\x : qbit. H(x)
-//\y : (qbit * qbit).(let <z,x> = y in CNOT(x,z))
-\y : qbit. \x : qbit. CNOT(x,y)
+\y : (qbit * qbit).(let <z,x> = y in CNOT(z,x))
+//\y : qbit. \x : qbit. CNOT(x,y)
 
 
 

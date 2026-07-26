@@ -44,6 +44,41 @@ buildDerivation prem term = case term of
          { rootLabel = (prem, TGate g args t, t)
          , subForest = gateLeaf : childTrees 
          }
+  TLet x xType val body t -> 
+    let 
+        -- 1. Derivazione del valore assegnato al let (nel contesto corrente)
+     valTree = buildDerivation prem val
+        
+        -- 2. Estensione del contesto con la nuova variabile x
+     extPrem = Map.insert x xType prem
+        
+        -- 3. Derivazione del corpo del let (nel contesto esteso)
+     bodyTree = buildDerivation extPrem body
+        
+    in Node 
+        { rootLabel = (prem, TLet x xType val body t, t)
+        , subForest = [valTree, bodyTree] -- I due rami delle premesse
+        }
+  TDecomp x y pair body t -> 
+      let 
+        -- Derivazione premessa da destrutturare 
+        pairTree = buildDerivation prem pair
+        
+       -- Estrazione tipi delle singole variabili 
+        (xType, yType) = case typeOf pair of
+                           TPair t1 t2 -> (t1, t2)
+        
+      -- Aggiornamento contesto 
+        extPrem = Map.insert x xType (Map.insert y yType prem)
+        
+        -- Derivazione del corpo
+        bodyTree = buildDerivation extPrem body
+        
+      in Node 
+           { rootLabel = (prem, TDecomp x y pair body t, t)
+           , subForest = [pairTree, bodyTree] 
+           }
+
 
 buildDerivationV :: Prem -> TypedValue -> Type -> TypeDerivation
 buildDerivationV prem val t = case val of
@@ -74,7 +109,13 @@ getGateType "CNOT" =
   in TFun qpair qpair                     -- (Q x Q) -> (Q x Q)
 getGateType _      = TFun TQbit TQbit
 
-
+typeOf :: TypedTerm -> Type
+typeOf (TV _ t)            = t
+typeOf (TApp _ _ t)        = t
+typeOf (TGate _ _ t)       = t
+typeOf (TLet _ _ _ _ t)    = t
+typeOf (TDecomp _ _ _ _ t) = t
+typeOf (TIf _ _ _ t)       = t
 
 -- Funzione principale di stampa
 prettyPrintDerivation :: TypeDerivation -> String
