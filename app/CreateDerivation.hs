@@ -99,6 +99,13 @@ buildDerivationV prem val t = case val of
          , subForest = [bodyTree] 
          }
 
+  TTensor t1 t2 tensorType ->   
+    let t1Tree = buildDerivation prem t1
+        t2Tree = buildDerivation prem t2
+    in Node 
+         { rootLabel = (prem, TV (TTensor t1 t2 tensorType) t, t)
+         , subForest = [t1Tree, t2Tree] 
+         }
 
 
 ---Utils
