@@ -21,12 +21,7 @@ startDerivation t = buildDerivation Map.empty t
 buildDerivation :: Prem -> TypedTerm -> TypeDerivation
 buildDerivation prem term = case term of
   -- Caso TV: Derivazione valore
-  TV innerTerm t -> 
-    let innerTree = buildDerivationV prem innerTerm t
-    in Node 
-         { rootLabel = (prem, TV innerTerm t, t)
-         , subForest = [innerTree] 
-         }
+  TV innerTerm t ->  buildDerivationV prem innerTerm t
 
   -- Caso TGate: Risolve le premesse ricorsivamente per ogni argomento, oltre che aggiungere il tipo del gate
   TGate g args t -> 
