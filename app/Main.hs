@@ -8,6 +8,7 @@ import Data.Void
 import Lexer
 import TypeTree
 import CreateDerivation
+import System.Environment (getArgs, getProgName)
 
 -- Parsing Dei tipi
 pTypeAtom :: Parser Type
@@ -151,18 +152,25 @@ mainParser = sc *> termParser <* eof
 
 main :: IO ()
 main = do
-    contenuto <- readFile "esempio.qqdc"
-    case Text.Megaparsec.runParser mainParser "" contenuto of
-        Left err -> putStrLn $ "Errore di Sintassi: " ++ show err
-        Right ast -> do
-            pPrint ast
-            let initialCtx = [("q1", TQbit), ("q2", TQbit), ("q3", TQbit)]
-            case annotate initialCtx ast of
-                Left typeErr -> putStrLn $ "Errore di Tipo/Linearità: " ++ typeErr
-                Right (typedAST, remainingCtx) -> do
-                    pPrint typedAST
-                    let c = startDerivation typedAST in
-                        printDerivation c
+    args <- getArgs
+    putStrLn $ "Argomenti ricevuti: " ++ show args
+    case args of
+        (filePath:_) -> do
+            contenuto <- readFile filePath
+            putStrLn $ "FILE: " ++ show contenuto
+            case Text.Megaparsec.runParser mainParser "" contenuto of
+                Left err -> putStrLn $ "Errore di Sintassi: " ++ show err
+                Right ast -> do
+        --            pPrint ast
+                    let initialCtx = [("q1", TQbit), ("q2", TQbit), ("q3", TQbit)]
+                    case annotate initialCtx ast of
+                        Left typeErr -> putStrLn $ "Errore di Tipo/Linearità: " ++ typeErr
+                        Right (typedAST, remainingCtx) -> do
+                            pPrint typedAST
+                            let c = startDerivation typedAST in
+                                printDerivation c
+
+        [] -> putStrLn "Errore: Devi specificare il nome di un file! (es. cabal run -- file.qqdc)"
 
 
 

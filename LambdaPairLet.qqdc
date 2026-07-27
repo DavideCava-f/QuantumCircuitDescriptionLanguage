@@ -1,0 +1,1 @@
+\x: (qbit * qbit). let <y,z> = x in <z,y>
