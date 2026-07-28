@@ -37,7 +37,7 @@ buildDerivation prem term = case term of
                  }
     in Node 
          { rootLabel = (prem, TGate g args t, t)
-         , subForest = gateLeaf : childTrees 
+         , subForest =  gateLeaf : childTrees  
          }
   TLet x xType val body t -> 
     let 
@@ -129,11 +129,11 @@ prettyPrintDerivation tree = go 0 tree
         indentStr = replicate (indent * 2) ' '
         
         -- Formattazione delle premesse: {x : Qbit, y : Qbit}
-        premList  = [k ++ " : " ++ show v | (k, v) <- Map.toList prem]
+        premList  = [k ++ " : " ++ showTypePretty v | (k, v) <- Map.toList prem]
         premStr   = "{" ++ intercalate ", " premList ++ "}"
         
         -- Il giudizio di tipo: {Gamma} |- Termine : Tipo
-        judgement = premStr ++ " |- " ++ showTermPretty term ++ " : " ++ show typ
+        judgement = premStr ++ " |- " ++ showTermPretty term ++ " : " ++ showTypePretty typ
         
         -- Stampa delle sotto-premesse (figli dell'albero)
         childrenStr = case subs of
@@ -146,7 +146,21 @@ prettyPrintDerivation tree = go 0 tree
 printDerivation :: TypeDerivation -> IO ()
 printDerivation deriv = putStrLn (prettyPrintDerivation deriv)
 
+colorQbit :: String -> String
+colorQbit s = "\ESC[1;36m" ++ s ++ "\ESC[0m"   -- Ciano Brillante
 
+colorTFun :: String -> String
+colorTFun s = "\ESC[1;35m" ++ s ++ "\ESC[0m"   -- Magenta Brillante
+
+colorTPair :: String -> String
+colorTPair s = "\ESC[1;33m" ++ s ++ "\ESC[0m"
+
+
+showTypePretty :: Type -> String
+showTypePretty TQbit        = colorQbit "qbit"
+showTypePretty (TFun t1 t2) = colorTFun "TFUN" ++ " (" ++ showTypePretty t1 ++ " -> " ++ showTypePretty t2 ++ ")"
+showTypePretty (TPair t1 t2)= colorTPair "TPAIR" ++ " (" ++ showTypePretty t1 ++ ", " ++ showTypePretty t2 ++ ")"
+showTypePretty t            = show t -- Fallback per altri tipi non specificati
 
 showTermPretty :: TypedTerm -> String
 showTermPretty term = case term of
