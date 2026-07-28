@@ -1,0 +1,1 @@
+\q1: qbit. \q2: qbit. if M(q1) then X(q2) else H(q2)

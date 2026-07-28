@@ -1,0 +1,7 @@
+let g : qbit -> qbit = \a : qbit. X(a) in
+let m : (qbit -> qbit) -> (qbit -> qbit) = 
+    \f : qbit -> qbit. \x : qbit.
+        let y : qbit = H(x) in
+        let z : qbit = f y in
+        H(z) 
+in m g 

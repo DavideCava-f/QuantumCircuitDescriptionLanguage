@@ -1,4 +1,6 @@
 module CreateDerivation where
+
+import qualified Data.Set as Set
 import qualified Data.Map as Map
 import TypeTree (Type(..),Term(..),TypedTerm(..),Value(..),TypedValue(..))
 import Data.List (intercalate)
@@ -74,7 +76,36 @@ buildDerivation prem term = case term of
            , subForest = [pairTree, bodyTree] 
            }
 
+  TApp f x t -> 
+    let 
+        -- 1. Derivazione del valore applicante
+     appl = buildDerivation prem f
+        
+        
+        -- 3. Derivazione del valore applicato
+     applied = buildDerivation prem x
+        
+    in Node 
+        { rootLabel = (prem, TApp f x t,t)
+        , subForest = [appl, applied] -- I due rami
+        }
 
+  TIf cond branch1 branch2 t -> 
+    let 
+        -- 1. Derivazione condiizione
+     condDer = buildDerivation prem cond
+        
+        
+
+        -- 1. Derivazione then
+     branch1Der = buildDerivation prem branch1
+        -- 1. Derivazione esle
+     branch2Der = buildDerivation prem branch2
+        
+    in Node 
+        { rootLabel = (prem, TIf cond branch1 branch2 t,t)
+        , subForest = [condDer, branch1Der, branch2Der] -- I dtre rami
+        }
 buildDerivationV :: Prem -> TypedValue -> Type -> TypeDerivation
 buildDerivationV prem val t = case val of
 -- Caso TVar: Foglia (nessuna premessa aggiunta)
@@ -109,6 +140,7 @@ getGateType :: String -> Type
 getGateType "CNOT" = 
   let qpair = TPair TQbit TQbit 
   in TFun qpair qpair                     -- (Q x Q) -> (Q x Q)
+getGateType "M"      = TBit
 getGateType _      = TFun TQbit TQbit
 
 typeOf :: TypedTerm -> Type
@@ -128,8 +160,10 @@ prettyPrintDerivation tree = go 0 tree
       let 
         indentStr = replicate (indent * 2) ' '
         
+        usedVars = freeVarsTerm term       
+        filteredPrem = Map.restrictKeys prem usedVars
         -- Formattazione delle premesse: {x : Qbit, y : Qbit}
-        premList  = [k ++ " : " ++ showTypePretty v | (k, v) <- Map.toList prem]
+        premList  = [k ++ " : " ++ showTypePretty v | (k, v) <- Map.toList filteredPrem]
         premStr   = "{" ++ intercalate ", " premList ++ "}"
         
         -- Il giudizio di tipo: {Gamma} |- Termine : Tipo
@@ -141,6 +175,21 @@ prettyPrintDerivation tree = go 0 tree
           _  -> "\n" ++ intercalate "\n" (map (go (indent + 1)) subs)
       in
         indentStr ++ "|-- " ++ judgement ++ childrenStr
+
+freeVarsTerm :: TypedTerm -> Set.Set String
+freeVarsTerm term = case term of
+  TV val _                 -> freeVarsVal val
+  TGate _ args _           -> Set.unions (map freeVarsTerm args)
+  TApp f arg _             -> Set.union (freeVarsTerm f) (freeVarsTerm arg)
+  TLet x _ val body _      -> Set.union (freeVarsTerm val) (Set.delete x (freeVarsTerm body))
+  TDecomp x y pair body _  -> Set.union (freeVarsTerm pair) (freeVarsTerm body Set.\\ Set.fromList [x, y])
+  TIf c t e _              -> Set.unions [freeVarsTerm c, freeVarsTerm t, freeVarsTerm e]
+
+freeVarsVal :: TypedValue -> Set.Set String
+freeVarsVal val = case val of
+  TVar x _                 -> Set.singleton x
+  TLambda x _ body _       -> Set.delete x (freeVarsTerm body)
+  TTensor t1 t2 _          -> Set.union (freeVarsTerm t1) (freeVarsTerm t2)
 
 -- Stampa direttamente a schermo
 printDerivation :: TypeDerivation -> IO ()
@@ -158,6 +207,7 @@ colorTPair s = "\ESC[1;33m" ++ s ++ "\ESC[0m"
 
 showTypePretty :: Type -> String
 showTypePretty TQbit        = colorQbit "qbit"
+showTypePretty TBit        = colorQbit "bit"
 showTypePretty (TFun t1 t2) = colorTFun "TFUN" ++ " (" ++ showTypePretty t1 ++ " -> " ++ showTypePretty t2 ++ ")"
 showTypePretty (TPair t1 t2)= colorTPair "TPAIR" ++ " (" ++ showTypePretty t1 ++ ", " ++ showTypePretty t2 ++ ")"
 showTypePretty t            = show t -- Fallback per altri tipi non specificati

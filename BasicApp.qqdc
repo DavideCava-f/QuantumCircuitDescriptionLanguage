@@ -1,0 +1,1 @@
+\f : qbit -> qbit. \x : qbit. f x
