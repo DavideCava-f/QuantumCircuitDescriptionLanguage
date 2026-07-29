@@ -16,7 +16,11 @@ data Tree a = Node -- Generic a
 type TypeDerivation = Tree Concl
 
 startDerivation :: TypedTerm -> TypeDerivation
-startDerivation t = buildDerivation Map.empty t
+startDerivation t = 
+    let 
+        tree = buildDerivation Map.empty t
+    in
+        cleanDerivationTree tree
 
 
 
@@ -134,7 +138,39 @@ buildDerivationV prem val t = case val of
          }
 
 
----Utils
+--- Cleaning Tree
+
+freeVarsTerm :: TypedTerm -> Set.Set String
+freeVarsTerm term = case term of
+  TV val _                 -> freeVarsVal val
+  TGate _ args _           -> Set.unions (map freeVarsTerm args)
+  TApp f arg _             -> Set.union (freeVarsTerm f) (freeVarsTerm arg)
+  TLet x _ val body _      -> Set.union (freeVarsTerm val) (Set.delete x (freeVarsTerm body))
+  TDecomp x y pair body _  -> Set.union (freeVarsTerm pair) (freeVarsTerm body Set.\\ Set.fromList [x, y])
+  TIf c t e _              -> Set.unions [freeVarsTerm c, freeVarsTerm t, freeVarsTerm e]
+
+freeVarsVal :: TypedValue -> Set.Set String
+freeVarsVal val = case val of
+  TVar x _                 -> Set.singleton x
+  TLambda x _ body _       -> Set.delete x (freeVarsTerm body)
+  TTensor t1 t2 _          -> Set.union (freeVarsTerm t1) (freeVarsTerm t2)
+
+cleanDerivationTree :: TypeDerivation -> TypeDerivation
+cleanDerivationTree (Node (prem, term, typ) subs) =
+    let 
+      -- Trova le variabili utilizzate nel termine
+      usedVars     = freeVarsTerm term
+      
+      -- Prendi solo le variabili utili
+      filteredPrem = Map.restrictKeys prem usedVars
+      
+      -- chiamata ricorsiva
+      cleanedSubs  = map cleanDerivationTree subs
+    in 
+      -- Restituisce un nuovo nodo con la 'filteredPrem' al posto di 'prem'
+      Node (filteredPrem, term, typ) cleanedSubs
+
+-- Utils
 
 getGateType :: String -> Type
 getGateType "CNOT" = 
@@ -151,7 +187,7 @@ typeOf (TLet _ _ _ _ t)    = t
 typeOf (TDecomp _ _ _ _ t) = t
 typeOf (TIf _ _ _ t)       = t
 
--- Funzione principale di stampa
+-- Pretty Print
 prettyPrintDerivation :: TypeDerivation -> String
 prettyPrintDerivation tree = go 0 tree
   where
@@ -160,10 +196,10 @@ prettyPrintDerivation tree = go 0 tree
       let 
         indentStr = replicate (indent * 2) ' '
         
-        usedVars = freeVarsTerm term       
-        filteredPrem = Map.restrictKeys prem usedVars
+        --usedVars = freeVarsTerm term       
+        --filteredPrem = Map.restrictKeys prem usedVars
         -- Formattazione delle premesse: {x : Qbit, y : Qbit}
-        premList  = [k ++ " : " ++ showTypePretty v | (k, v) <- Map.toList filteredPrem]
+        premList  = [k ++ " : " ++ showTypePretty v | (k, v) <- Map.toList prem]
         premStr   = "{" ++ intercalate ", " premList ++ "}"
         
         -- Il giudizio di tipo: {Gamma} |- Termine : Tipo
@@ -176,20 +212,6 @@ prettyPrintDerivation tree = go 0 tree
       in
         indentStr ++ "|-- " ++ judgement ++ childrenStr
 
-freeVarsTerm :: TypedTerm -> Set.Set String
-freeVarsTerm term = case term of
-  TV val _                 -> freeVarsVal val
-  TGate _ args _           -> Set.unions (map freeVarsTerm args)
-  TApp f arg _             -> Set.union (freeVarsTerm f) (freeVarsTerm arg)
-  TLet x _ val body _      -> Set.union (freeVarsTerm val) (Set.delete x (freeVarsTerm body))
-  TDecomp x y pair body _  -> Set.union (freeVarsTerm pair) (freeVarsTerm body Set.\\ Set.fromList [x, y])
-  TIf c t e _              -> Set.unions [freeVarsTerm c, freeVarsTerm t, freeVarsTerm e]
-
-freeVarsVal :: TypedValue -> Set.Set String
-freeVarsVal val = case val of
-  TVar x _                 -> Set.singleton x
-  TLambda x _ body _       -> Set.delete x (freeVarsTerm body)
-  TTensor t1 t2 _          -> Set.union (freeVarsTerm t1) (freeVarsTerm t2)
 
 -- Stampa direttamente a schermo
 printDerivation :: TypeDerivation -> IO ()
