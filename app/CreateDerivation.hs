@@ -176,7 +176,7 @@ getGateType :: String -> Type
 getGateType "CNOT" = 
   let qpair = TPair TQbit TQbit 
   in TFun qpair qpair                     -- (Q x Q) -> (Q x Q)
-getGateType "M"      = TBit
+getGateType "M"      = TFun TQbit TBit
 getGateType _      = TFun TQbit TQbit
 
 typeOf :: TypedTerm -> Type
