@@ -8,6 +8,7 @@ import Data.Void
 import Lexer
 import TypeTree
 import CreateDerivation
+import CircuitGraph
 import System.Environment (getArgs, getProgName)
 
 -- Parsing Dei tipi
@@ -167,8 +168,9 @@ main = do
                         Left typeErr -> putStrLn $ "Errore di Tipo/Linearità: " ++ typeErr
                         Right (typedAST, remainingCtx) -> do
                             pPrint typedAST
-                            let c = startDerivation typedAST in
+                            let c = startDerivation typedAST in do
                                 printDerivation c
+                                print (extractData c [])
 
         [] -> putStrLn "Errore: Devi specificare il nome di un file! (es. cabal run -- file.qqdc)"
 
