@@ -7,12 +7,32 @@ import TypeTree (Type(..),Term(..),TypedTerm(..),Value(..),TypedValue(..))
 import CreateDerivation (Prem(..),Concl(..),TypeDerivation(..),Tree(..))
 import Debug.Trace (trace)
 
---type Address = Map.empty
+type Address = Map.Map String String
+emptyAddress :: Address
+emptyAddress = Map.empty
 data Position = P | N | L | R deriving (Eq, Ord, Show)
 type Id = [Position]
---type Token = (Position, Address) 
+type Token = (Id, Address) 
 type DATA = Set.Set Id
 type NDATA = Set.Set Id
+
+createTokens :: NDATA -> Set.Set Token
+createTokens negativePos = Set.map (\idTok -> (idTok, Map.empty)) negativePos
+
+extractInitialConf :: TypeDerivation -> (TypeDerivation, Set.Set Token, Set.Set Token)
+extractInitialConf pi =
+    let 
+        -- 1. Estraiamo i Set complessivi (DATA e NDATA)
+        -- Nota: passiamo l'Id iniziale vuoto [] a extractData
+        (totalData, negativePos) = extractData pi []
+        
+        -- 2. Creiamo i token associando l'indirizzo vuoto Map.empty
+        tokens = createTokens negativePos
+        
+        -- 3. Inizializziamo l'Extended Circuit (per ora vuoto)
+        extendedCircuit = Set.empty
+    in
+        (pi, tokens, extendedCircuit)   
 
 
 extractData :: TypeDerivation -> Id -> (DATA, NDATA) 

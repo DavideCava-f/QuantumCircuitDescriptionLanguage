@@ -170,7 +170,7 @@ main = do
                             pPrint typedAST
                             let c = startDerivation typedAST in do
                                 printDerivation c
-                                print (extractData c [])
+                                print (extractInitialConf c)
 
         [] -> putStrLn "Errore: Devi specificare il nome di un file! (es. cabal run -- file.qqdc)"
 
