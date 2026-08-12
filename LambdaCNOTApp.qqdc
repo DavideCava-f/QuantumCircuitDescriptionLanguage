@@ -1,0 +1,1 @@
+\x : qbit. \y : qbit. CNOT(x,y)
