@@ -170,8 +170,16 @@ main = do
                             pPrint typedAST
                             let c = startDerivation typedAST in do
                                 printDerivation c
-                                let (allData, allNData) = extractAllData c
-                                print allData
+                                let allData = startMachine c
+                                prettyPrintData "DATA" allData
+                                let initials = findFirstLevel allData 
+                                let tokensState = addTokensFromData initials emptyTokenState
+                                let testtoks = CircuitGraph.tokens tokensState                                
+                                let restoks = map (\tok -> applyLambda "x" tok allData) testtoks
+                                prettyPrintTokens "TOKSTEST" testtoks
+                                prettyPrintTokens "TOKSREST" restoks
+
+
 
         [] -> putStrLn "Errore: Devi specificare il nome di un file! (es. cabal run -- file.qqdc)"
 
