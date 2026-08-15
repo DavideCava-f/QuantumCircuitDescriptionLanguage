@@ -39,6 +39,31 @@ inferRule typedTerm = case typedTerm of
     TTensor _ _ _   -> TTENSOR
   _                    -> error "Termine non riconosciuto"
 
+applyVar :: Token -> DATA -> Token
+applyVar token@((term, pol, pos, seq, pi), lab, addr) allData =
+  case pol of
+    N -> 
+        case seq of
+
+            Concl ->
+                let matchedId = filterByPathPi pi . filterPremises . filterByPosLR pos $ allData
+                in 
+                    (head matchedId, lab, addr)
+            Prem _ 0 ->
+                let matchedId = filterByPathPi pi . filterConcl . filterByPosLR pos $ allData
+                in 
+                    (head matchedId, lab, addr)
+{--
+    P -> 
+      let usefulData = filterByPathPi (dropLast pi) allData
+      in case seq of
+        Concl -> 
+          let matchedId = filterByPosLR (R : pos) usefulData -- Usare ':' invece di '++'
+          in (head matchedId, lab, addr)
+        Prem _ _ -> 
+          let matchedId = filterByPosLR (L : pos) usefulData -- Usare ':' invece di '++'
+          in (head matchedId, lab, addr)
+--}
 applyLambda :: String -> Token -> DATA -> Token
 applyLambda x token@((term, pol, pos, seq, pi), lab, addr) allData =
   case pol of
@@ -69,6 +94,7 @@ applyLambda x token@((term, pol, pos, seq, pi), lab, addr) allData =
 applyRule :: Token -> Rule -> DATA -> Token
 applyRule tok rule allData = case rule of
     TLAMBDA x -> applyLambda x tok allData
+    TVAR -> applyVar tok allData
 
 stopCond :: Token -> Bool
 stopCond ((_, pol, _, _, pi), _, _) = pol == P && null pi

@@ -172,12 +172,16 @@ main = do
                                 printDerivation c
                                 let allData = startMachine c
                                 prettyPrintData "DATA" allData
-                                let initials = findFirstLevel allData 
+                                let initials = findInitials allData 
                                 let tokensState = addTokensFromData initials emptyTokenState
                                 let testtoks = CircuitGraph.tokens tokensState                                
-                                let restoks = map (\tok -> applyLambda "x" tok allData) testtoks
-                                prettyPrintTokens "TOKSTEST" testtoks
-                                prettyPrintTokens "TOKSREST" restoks
+                                let restoks = map (\tok -> applyLambda "x" tok allData) testtoks 
+                                let varToks = map (\tok -> applyVar tok allData) restoks
+                                let finalToks = map (\tok -> applyLambda "x" tok allData) varToks
+                                prettyPrintTokens "TOKSSTART" testtoks
+                                prettyPrintTokens "TOKSLAMBDA" restoks
+                                prettyPrintTokens "TOKSVAR" varToks
+                                prettyPrintTokens "TOKSFINAL" finalToks
 
 
 
