@@ -174,16 +174,19 @@ main = do
                                 prettyPrintData "DATA" allData
                                 let initials = findInitials allData 
                                 let tokensState = addTokensFromData initials emptyTokenState
-                                let testtoks = CircuitGraph.tokens tokensState                                
-                                let restoks = map (\tok -> applyLambda "x" tok allData) testtoks 
+                           {-   let testtoks = CircuitGraph.tokens tokensState                                
+                                let restoks = map (\tok -> applyLambda "y" tok allData) testtoks 
                                 let varToks = map (\tok -> applyVar tok allData) restoks
-                                let finalToks = map (\tok -> applyLambda "x" tok allData) varToks
+                                let finalToks = map (\tok -> applyLambda "y" tok allData) varToks
                                 prettyPrintTokens "TOKSSTART" testtoks
                                 prettyPrintTokens "TOKSLAMBDA" restoks
                                 prettyPrintTokens "TOKSVAR" varToks
                                 prettyPrintTokens "TOKSFINAL" finalToks
-
-
+                            -}
+                                let toks  = CircuitGraph.tokens tokensState
+                                print toks
+                                let resultCables = map (\tok -> travel tok allData) toks
+                                print resultCables
 
         [] -> putStrLn "Errore: Devi specificare il nome di un file! (es. cabal run -- file.qqdc)"
 

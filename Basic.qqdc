@@ -1,1 +1,1 @@
-\x : qbit -> qbit. x 
+\x: (qbit -> qbit) -> (qbit -> qbit). x

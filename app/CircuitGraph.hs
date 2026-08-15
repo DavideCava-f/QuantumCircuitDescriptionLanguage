@@ -5,7 +5,7 @@ import qualified Data.Map as Map
 import qualified Data.Set as Set
 import TypeTree (Type(..),Term(..),TypedTerm(..),Value(..),TypedValue(..))
 import CreateDerivation (Prem(..),Concl(..),TypeDerivation(..),Tree(..))
-import Debug.Trace (trace)
+import Debug.Trace (trace, traceShowId)
 
 type Address = Map.Map String String
 data PosInSeq = Concl | Prem String Int deriving (Show,Eq)
@@ -31,13 +31,23 @@ emptyTokenState :: TokenState
 emptyTokenState = TokenState [] 0
 
 
-inferRule :: TypedTerm -> Rule
-inferRule typedTerm = case typedTerm of
-  TV v _ -> case v of
-    TVar _ _             -> TVAR
-    TLambda x _ _ _   -> TLAMBDA x
-    TTensor _ _ _   -> TTENSOR
-  _                    -> error "Termine non riconosciuto"
+inferRule :: Token -> DATA -> Rule
+inferRule token@((term, pol, pos, seq, pi), lab, addr) allData =
+  let 
+
+    termToInspect = if pol == P
+                      then let fatherId = head (filterByPathPi (dropLast pi) allData)
+                           in getTerm fatherId
+                      else term
+  in 
+
+    case termToInspect of
+      TV v _ -> case v of
+        TVar _ _          -> TVAR
+        TLambda x _ _ _   -> TLAMBDA x
+        TTensor _ _ _   -> TTENSOR
+      _                    -> error "Termine non riconosciuto"
+
 
 applyVar :: Token -> DATA -> Token
 applyVar token@((term, pol, pos, seq, pi), lab, addr) allData =
@@ -46,11 +56,11 @@ applyVar token@((term, pol, pos, seq, pi), lab, addr) allData =
         case seq of
 
             Concl ->
-                let matchedId = filterByPathPi pi . filterPremises . filterByPosLR pos $ allData
+                let matchedId = traceShowId (filterByPathPi pi . filterPremises . filterByPosLR pos $ allData)
                 in 
                     (head matchedId, lab, addr)
             Prem _ 0 ->
-                let matchedId = filterByPathPi pi . filterConcl . filterByPosLR pos $ allData
+                let matchedId = traceShowId (filterByPathPi pi . filterConcl . filterByPosLR pos $ allData)
                 in 
                     (head matchedId, lab, addr)
 {--
@@ -72,10 +82,10 @@ applyLambda x token@((term, pol, pos, seq, pi), lab, addr) allData =
         let usefulData = filterByPathPi (pi ++ [0]) allData
         in case p of
           L -> let premiseData = getPremiseN x usefulData
-                   matchedId  = filterByPosLR ps premiseData
+                   matchedId  = traceShowId (filterByPosLR ps premiseData)
                in (head matchedId, lab, addr)
           R -> let conclData  = filterConcl usefulData
-                   matchedId = filterByPosLR ps conclData
+                   matchedId = traceShowId (filterByPosLR ps conclData)
                in (head matchedId, lab, addr) --L'ID e uno solo ma essendo lista chiamohead
       [] -> error "Posizione LR vuota"
 
@@ -83,10 +93,10 @@ applyLambda x token@((term, pol, pos, seq, pi), lab, addr) allData =
       let usefulData = filterByPathPi (dropLast pi) allData
       in case seq of
         Concl -> 
-          let matchedId = filterByPosLR (R : pos) usefulData -- Usare ':' invece di '++'
+          let matchedId = traceShowId (filterByPosLR (R : pos) usefulData) -- Usare ':' invece di '++'
           in (head matchedId, lab, addr)
         Prem _ _ -> 
-          let matchedId = filterByPosLR (L : pos) usefulData -- Usare ':' invece di '++'
+          let matchedId = traceShowId (filterByPosLR (L : pos) usefulData) -- Usare ':' invece di '++'
           in (head matchedId, lab, addr)
 
 
@@ -99,15 +109,17 @@ applyRule tok rule allData = case rule of
 stopCond :: Token -> Bool
 stopCond ((_, pol, _, _, pi), _, _) = pol == P && null pi
 
+upgradeCircuit :: Label -> Cable
+upgradeCircuit lab = "I"
+
 travel :: Token -> DATA -> Cable
 travel tok@((term, pol, pos, seq, pi), lab, addr) allData =
-  let rule   = inferRule term
+  let rule   = inferRule tok allData
       newTok = applyRule tok rule allData
   in 
     if stopCond newTok 
-      then travel newTok allData--upgradeCircuit lab
+      then upgradeCircuit lab
       else travel newTok allData   
-
 
 
 --Running
@@ -251,6 +263,10 @@ dropLast :: [a] -> [a]
 dropLast []       = []
 dropLast [_]      = []  
 dropLast (x:xs)   = x : dropLast xs
+
+getTerm :: Id -> TypedTerm
+getTerm (term, _, _, _, _) = term
+
 ----
 
 findInitials :: DATA -> DATA
