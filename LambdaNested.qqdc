@@ -1,1 +1,1 @@
-\y : qbit. \x : qbit. CNOT(x,y)
+\f : qbit -> qbit. \x : qbit. H(f x)

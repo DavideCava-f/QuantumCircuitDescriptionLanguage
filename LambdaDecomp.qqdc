@@ -1,1 +1,1 @@
-\y : (qbit * qbit).(let <z,x> = y in CNOT(z,x))
+\y : (qbit * qbit).(let <z,x> = y in <x,z>)

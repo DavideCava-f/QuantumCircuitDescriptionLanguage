@@ -45,7 +45,7 @@ inferRule token@((term, pol, pos, seq, pi), lab, addr) allData =
       TV v _ -> case v of
         TVar _ _          -> TVAR
         TLambda x _ _ _   -> TLAMBDA x
-        TTensor _ _ _   -> TTENSOR
+        TTensor _ _ _   -> TTENSOR 
       _                    -> error "Termine non riconosciuto"
 
 
@@ -63,48 +63,111 @@ applyVar token@((term, pol, pos, seq, pi), lab, addr) allData =
                 let matchedId = traceShowId (filterByPathPi pi . filterConcl . filterByPosLR pos $ allData)
                 in 
                     (head matchedId, lab, addr)
-{--
-    P -> 
-      let usefulData = filterByPathPi (dropLast pi) allData
-      in case seq of
-        Concl -> 
-          let matchedId = filterByPosLR (R : pos) usefulData -- Usare ':' invece di '++'
-          in (head matchedId, lab, addr)
-        Prem _ _ -> 
-          let matchedId = filterByPosLR (L : pos) usefulData -- Usare ':' invece di '++'
-          in (head matchedId, lab, addr)
---}
+
+applyTensor :: Token -> DATA -> Token
+applyTensor token@((term, pol, pos, seq, pi), lab, addr) allData =
+  case pol of
+    N -> case seq of
+        -- Connetti a elemento negativo che ha come nome quello in seq, trovare quindi il figlio corrispondente (Si presuppone che siano tutti nella premessa i qbit negativi di tensor)
+       Prem y _ ->
+         let -- Recuperiamo i sottoalberi per il figlio 0 e il figlio 1
+            dataChild0 = filterByPathPi (pi ++ [0]) allData
+            dataChild1 = filterByPathPi (pi ++ [1]) allData
+            
+            -- Scegliamo i dati del figlio che possiede la premessa con nome 'y'
+            targetData = if hasPremise y dataChild0
+                            then dataChild0
+                            else dataChild1
+                           
+            premiseData = getPremiseN y targetData
+            matchedId   = traceShowId (filterByPosLR pos premiseData)
+         in (head matchedId, lab, addr)
+
+       Concl -> error "I qubit negativi di Tensor si presuppongono essere nella premessa"
+
+    
+    P -> case seq of
+        -- Connetti a elemento negativo che ha come nome quello in seq, trovare quindi il figlio corrispondente (Si presuppone che siano tutti nella premessa i qbit negativi di tensor)
+       Prem y _ ->
+         let -- Recuperiamo i sottoalberi per il figlio 0 e il figlio 1
+            dataFather = filterByPathPi (dropLast pi) allData
+                           
+            premiseData = getPremiseN y dataFather
+            matchedId   = traceShowId (filterByPosLR pos premiseData)
+         in (head matchedId, lab, addr)
+
+       Concl -> 
+         let 
+             parentPi  = dropLast pi
+             lastIndex = last pi  -- Può essere 0 oppure 1
+            
+            
+             lrPrefix  = if lastIndex == 0 then L else R
+            
+           
+             parentData = filterByPathPi parentPi allData
+             conclData  = filterConcl parentData
+            
+          
+             matchedId  = traceShowId (filterByPosLR (lrPrefix : pos) conclData)
+        in (head matchedId, lab, addr) -- Ho messo prefisso ma deve essere sempre vuoto [] a questo punto
+
+
 applyLambda :: String -> Token -> DATA -> Token
 applyLambda x token@((term, pol, pos, seq, pi), lab, addr) allData =
-  case pol of
-    N -> case pos of
-      (p : ps) -> -- Usa il pattern matching (p:ps) invece di (tail pos)!
-        let usefulData = filterByPathPi (pi ++ [0]) allData
-        in case p of
-          L -> let premiseData = getPremiseN x usefulData
-                   matchedId  = traceShowId (filterByPosLR ps premiseData)
-               in (head matchedId, lab, addr)
-          R -> let conclData  = filterConcl usefulData
-                   matchedId = traceShowId (filterByPosLR ps conclData)
-               in (head matchedId, lab, addr) --L'ID e uno solo ma essendo lista chiamohead
-      [] -> error "Posizione LR vuota"
+  case seq of
 
-    P -> 
-      let usefulData = filterByPathPi (dropLast pi) allData
-      in case seq of
-        Concl -> 
-          let matchedId = traceShowId (filterByPosLR (R : pos) usefulData) -- Usare ':' invece di '++'
-          in (head matchedId, lab, addr)
-        Prem _ _ -> 
-          let matchedId = traceShowId (filterByPosLR (L : pos) usefulData) -- Usare ':' invece di '++'
+    -- 1. CASO IN GAMMA: Premessa con nome 'y' diverso da 'x'
+    Prem y idx | y /= x -> 
+      case pol of
+        N -> 
+          let usefulData  = filterByPathPi (pi ++ [0]) allData
+              premiseData = getPremiseN y usefulData
+              matchedId   = traceShowId (filterByPosLR pos premiseData)
           in (head matchedId, lab, addr)
 
+        P -> 
+          let usefulData  = filterByPathPi (dropLast pi) allData
+              premiseData = getPremiseN y usefulData
+              matchedId   = traceShowId (filterByPosLR pos premiseData)
+          in (head matchedId, lab, addr)
 
+    -- 2. CASO NON IN GAMMA: Ramo di fallback (quando seq è Prem x idx oppure Concl)
+    _ -> 
+      case pol of
+        N -> 
+          case pos of
+            (p : ps) -> 
+              let usefulData = filterByPathPi (pi ++ [0]) allData
+              in case p of
+                L -> 
+                  let premiseData = getPremiseN x usefulData
+                      matchedId   = traceShowId (filterByPosLR ps premiseData)
+                  in (head matchedId, lab, addr)
+
+                R -> 
+                  let conclData = filterConcl usefulData
+                      matchedId = traceShowId (filterByPosLR ps conclData)
+                  in (head matchedId, lab, addr)
+
+            [] -> error "Posizione LR vuota"
+
+        P -> 
+          let usefulData = filterByPathPi (dropLast pi) allData
+          in case seq of
+            Concl -> 
+              let matchedId = traceShowId (filterByPosLR (R : pos) usefulData)
+              in (head matchedId, lab, addr)
+
+            Prem _ _ -> 
+              let matchedId = traceShowId (filterByPosLR (L : pos) usefulData)
+              in (head matchedId, lab, addr)
 
 applyRule :: Token -> Rule -> DATA -> Token
 applyRule tok rule allData = case rule of
     TLAMBDA x -> applyLambda x tok allData
     TVAR -> applyVar tok allData
+    TTENSOR -> applyTensor tok allData
 
 stopCond :: Token -> Bool
 stopCond ((_, pol, _, _, pi), _, _) = pol == P && null pi
@@ -267,6 +330,8 @@ dropLast (x:xs)   = x : dropLast xs
 getTerm :: Id -> TypedTerm
 getTerm (term, _, _, _, _) = term
 
+hasPremise :: String -> DATA -> Bool
+hasPremise y d = not (null (getPremiseN y d))
 ----
 
 findInitials :: DATA -> DATA
