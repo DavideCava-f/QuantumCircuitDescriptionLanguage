@@ -38,7 +38,7 @@ buildDerivation prem term = case term of
      gateType = getGateType g
       
      gateLeaf = Node 
-                 { rootLabel = (prem, TV (TVar g gateType) gateType, gateType)
+                 { rootLabel = (prem, TGate g [] gateType, gateType)
                  , subForest = []
                  }
     in Node 

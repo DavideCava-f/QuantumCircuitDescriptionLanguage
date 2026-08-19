@@ -13,7 +13,7 @@ type PosInPi = Int
 emptyAddress :: Address
 emptyAddress = Map.empty
 
-data Rule = TLAMBDA String | TTENSOR | TVAR | TAPP | TDECOMP String String | TLET String deriving (Show)
+data Rule = TLAMBDA String | TGATE String | TTENSOR | TVAR | TAPP | TDECOMP String String | TLET String deriving (Show)
 data Position = L | R deriving (Show, Eq)
 data Polarity = P | N deriving (Show, Eq)
 type Id = (TypedTerm, Polarity, [Position], PosInSeq, [PosInPi])-- deriving (Show)
@@ -49,7 +49,55 @@ inferRule token@((term, pol, pos, seq, pi), lab, addr) allData =
       TDecomp z x _ _ _ -> TDECOMP z x
       TApp _ _ _ -> TAPP
       TLet x _ _ _ _ -> TLET x
+      TGate g _ _ -> TGATE g
       _                    -> error "Termine non riconosciuto"
+
+applyGate :: String -> Token -> DATA -> Token
+applyGate g token@((term, pol, pos, seq, pi), lab, addr) allData =
+
+  case seq of
+
+    -- ==========================================
+    -- CASO 1: TOKEN IN PREMESSA (Prem z _)
+    -- ==========================================
+    Prem z idx ->
+      case pol of
+        -- POLARITÀ NEGATIVA (N):
+        -- Trova tra i figli (0 o 1) quello che possiede la premessa 'z'
+        N ->
+          let targetData = filterByPathPi (pi ++ [1]) allData
+              premiseData = getPremiseN z targetData
+              matchedId   = traceShowId (filterByPosLR pos premiseData)
+          in (head matchedId, lab, addr)
+
+        -- POLARITÀ POSITIVA (P):
+        -- Risali al padre (dropLast pi) e cerca la premessa 'z'
+        P ->
+          let parentPi    = dropLast pi
+              parentData  = filterByPathPi parentPi allData
+              premiseData = getPremiseN z parentData
+              matchedId   = traceShowId (filterByPosLR pos premiseData)
+          in (head matchedId, lab, addr)
+
+    Concl ->
+        case pol of
+            P ->
+                let whichSon = last pi
+                    parentId = dropLast pi
+                in
+                    if whichSon == 1
+                        then 
+                            let matchedId = traceShowId (filterByPathPi (parentId ++ [0]) . filterConcl . filterByPosLR (L : pos) $ allData)
+                            in
+                                (head matchedId, lab, addr)
+                        else
+                             let matchedId = traceShowId (filterByPathPi (parentId) . filterConcl . filterByPosLR (tail pos) $ allData)
+                             in 
+                                (head matchedId, lab, addr)
+            N -> 
+                 let matchedId = traceShowId (filterByPathPi (pi) . filterConcl . filterByPosLR (R : (tail pos)) $ allData)
+                 in 
+                    (head matchedId, lab, addr)
 
 applyApp :: Token -> DATA -> Token
 applyApp token@((term, pol, pos, seq, pi), lab, addr) allData =
@@ -361,6 +409,7 @@ applyRule tok rule allData = case rule of
     TTENSOR -> applyTensor tok allData
     TDECOMP x y -> applyDecomp x y tok allData
     TLET x -> applyLet x tok allData
+    TGATE g -> applyGate g tok allData 
 
 stopCond :: Token -> Bool
 stopCond ((_, pol, _, _, pi), _, _) = pol == P && null pi
