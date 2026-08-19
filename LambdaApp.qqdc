@@ -1,0 +1,1 @@
+\y: qbit .((\x : qbit. x) y)

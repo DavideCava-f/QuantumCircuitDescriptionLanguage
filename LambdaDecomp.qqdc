@@ -1,1 +1,1 @@
-\y : (qbit * qbit).(let <z,x> = y in <x,z>)
+\f : (qbit * qbit) -> (qbit * qbit).\y : (qbit * qbit).(let <z,x> = f y in \g: qbit -> qbit. <g x,z>)

@@ -13,7 +13,7 @@ type PosInPi = Int
 emptyAddress :: Address
 emptyAddress = Map.empty
 
-data Rule = TLAMBDA String | TTENSOR | TVAR | TAPP | TDECOMP deriving (Show)
+data Rule = TLAMBDA String | TTENSOR | TVAR | TAPP | TDECOMP String String | TLET String deriving (Show)
 data Position = L | R deriving (Show, Eq)
 data Polarity = P | N deriving (Show, Eq)
 type Id = (TypedTerm, Polarity, [Position], PosInSeq, [PosInPi])-- deriving (Show)
@@ -46,8 +46,70 @@ inferRule token@((term, pol, pos, seq, pi), lab, addr) allData =
         TVar _ _          -> TVAR
         TLambda x _ _ _   -> TLAMBDA x
         TTensor _ _ _   -> TTENSOR 
+      TDecomp z x _ _ _ -> TDECOMP z x
+      TApp _ _ _ -> TAPP
+      TLet x _ _ _ _ -> TLET x
       _                    -> error "Termine non riconosciuto"
 
+applyApp :: Token -> DATA -> Token
+applyApp token@((term, pol, pos, seq, pi), lab, addr) allData =
+
+  case seq of
+
+    -- ==========================================
+    -- CASO 1: TOKEN IN PREMESSA (Prem z _)
+    -- ==========================================
+    Prem z idx ->
+      case pol of
+        -- POLARITÀ NEGATIVA (N):
+        -- Trova tra i figli (0 o 1) quello che possiede la premessa 'z'
+        N ->
+          let dataChild0 = filterByPathPi (pi ++ [0]) allData
+              dataChild1 = filterByPathPi (pi ++ [1]) allData
+              
+              targetData = if hasPremise z dataChild0 
+                             then dataChild0 
+                             else dataChild1
+                             
+              premiseData = getPremiseN z targetData
+              matchedId   = traceShowId (filterByPosLR pos premiseData)
+          in (head matchedId, lab, addr)
+
+        -- POLARITÀ POSITIVA (P):
+        -- Risali al padre (dropLast pi) e cerca la premessa 'z'
+        P ->
+          let parentPi    = dropLast pi
+              parentData  = filterByPathPi parentPi allData
+              premiseData = getPremiseN z parentData
+              matchedId   = traceShowId (filterByPosLR pos premiseData)
+          in (head matchedId, lab, addr)
+
+    Concl ->
+        case pol of
+            N ->
+                let matchedId = traceShowId (filterByPathPi (pi ++ [0]) . filterConcl . filterByPosLR (R : pos) $ allData) 
+                in 
+                    (head matchedId, lab, addr)
+            P ->
+                let whichSon = last pi
+                    parentId = dropLast pi
+                in
+                    if whichSon == 0
+                        then 
+                            case pos of
+                                (p:ps) -> case p of
+                                    R -> let matchedId = traceShowId (filterByPathPi (parentId) . filterConcl . filterByPosLR (ps) $ allData)
+                                         in
+                                            (head matchedId, lab, addr)
+                                    L -> let matchedId = traceShowId (filterByPathPi (parentId ++ [1]) . filterConcl . filterByPosLR (ps) $ allData)
+                                         in
+                                            (head matchedId, lab, addr)
+                                _ -> error "Errore Applicazione, non puo essere vuoto il pos del primo figlio"
+                        else
+
+                             let matchedId = traceShowId (filterByPathPi (parentId ++ [0]) . filterConcl . filterByPosLR (L : pos) $ allData)
+                             in 
+                                (head matchedId, lab, addr)
 
 applyVar :: Token -> DATA -> Token
 applyVar token@((term, pol, pos, seq, pi), lab, addr) allData =
@@ -112,6 +174,79 @@ applyTensor token@((term, pol, pos, seq, pi), lab, addr) allData =
              matchedId  = traceShowId (filterByPosLR (lrPrefix : pos) conclData)
         in (head matchedId, lab, addr) -- Ho messo prefisso ma deve essere sempre vuoto [] a questo punto
 
+applyDecomp :: String -> String -> Token -> DATA -> Token
+applyDecomp x y token@((term, pol, pos, seq, pi), lab, addr) allData =
+  case seq of
+
+    -- ==========================================
+    -- CASO 1: TOKEN IN PREMESSA (Prem z _)
+    -- ==========================================
+    Prem z idx ->
+      case pol of
+        -- POLARITÀ NEGATIVA (N):
+        -- Trova tra i figli (0 o 1) quello che possiede la premessa 'z'
+        N ->
+          let dataChild0 = filterByPathPi (pi ++ [0]) allData
+              dataChild1 = filterByPathPi (pi ++ [1]) allData
+              
+              targetData = if hasPremise z dataChild0 
+                             then dataChild0 
+                             else dataChild1
+                             
+              premiseData = getPremiseN z targetData
+              matchedId   = traceShowId (filterByPosLR pos premiseData)
+          in (head matchedId, lab, addr)
+
+        -- POLARITÀ POSITIVA (P):
+        -- Risali al padre (dropLast pi) e cerca la premessa 'z'
+        P ->
+          let parentPi    = dropLast pi
+              parentData  = filterByPathPi parentPi allData
+              premiseData = getPremiseN z parentData
+              matchedId   = traceShowId (filterByPosLR pos premiseData)
+          in (head matchedId, lab, addr)
+
+    -- ==========================================
+    -- CASO 2: TOKEN IN CONCLUSIONE (Concl)
+    -- ==========================================
+    Concl ->
+      case pol of
+        -- POLARITÀ NEGATIVA (N):
+        -- Vai nella conclusione del figlio 1 (pi ++ [1])
+        N ->
+          let child1Data = filterByPathPi (pi ++ [1]) allData
+              conclData  = filterConcl child1Data
+              matchedId  = traceShowId (filterByPosLR pos conclData)
+          in (head matchedId, lab, addr)
+
+        -- POLARITÀ POSITIVA (P):
+        P ->
+          let lastIndex = last pi
+              parentPi  = dropLast pi
+          in if lastIndex == 1
+               -- Se siamo nel Figlio 1: Vai nella conclusione del padre
+               then let parentData = filterByPathPi parentPi allData
+                        conclData  = filterConcl parentData
+                        matchedId  = traceShowId (filterByPosLR pos conclData)
+                    in (head matchedId, lab, addr)
+
+               -- Se siamo nel Figlio 0: Vai al corrispondente nel Figlio 1
+               else let sibling1Pi = parentPi ++ [1]
+                        siblingData = filterByPathPi sibling1Pi allData
+                    in case pos of
+                         -- Se la posizione inizia con L -> premessa della variabile x
+                         (L : ps) ->
+                           let premiseData = getPremiseN x siblingData
+                               matchedId   = traceShowId (filterByPosLR ps premiseData)
+                           in (head matchedId, lab, addr)
+
+                         -- Se la posizione inizia con R -> premessa della variabile y
+                         (R : ps) ->
+                           let premiseData = getPremiseN y siblingData
+                               matchedId   = traceShowId (filterByPosLR ps premiseData)
+                           in (head matchedId, lab, addr)
+
+                         [] -> error "Posizione LR vuota per il figlio 0 in Concl (P)"
 
 applyLambda :: String -> Token -> DATA -> Token
 applyLambda x token@((term, pol, pos, seq, pi), lab, addr) allData =
@@ -156,18 +291,76 @@ applyLambda x token@((term, pol, pos, seq, pi), lab, addr) allData =
           let usefulData = filterByPathPi (dropLast pi) allData
           in case seq of
             Concl -> 
-              let matchedId = traceShowId (filterByPosLR (R : pos) usefulData)
+              let matchedId = traceShowId (filterConcl . filterByPosLR (R : pos) $ usefulData)
               in (head matchedId, lab, addr)
 
             Prem _ _ -> 
-              let matchedId = traceShowId (filterByPosLR (L : pos) usefulData)
+              let matchedId = traceShowId (filterConcl . filterByPosLR (L : pos) $ usefulData)
               in (head matchedId, lab, addr)
+
+applyLet :: String -> Token -> DATA -> Token
+applyLet x token@((term, pol, pos, seq, pi), lab, addr) allData =
+  case seq of
+
+    -- 1. CASO IN GAMMA: Premessa con nome 'y' diverso da 'x'
+    Prem y idx | y /= x -> 
+      case pol of
+        N -> 
+          let dataChild0 = filterByPathPi (pi ++ [0]) allData
+              dataChild1 = filterByPathPi (pi ++ [1]) allData
+              
+              targetData = if hasPremise y dataChild0 
+                             then dataChild0 
+                             else dataChild1
+                             
+              premiseData = getPremiseN y targetData
+              matchedId   = traceShowId (filterByPosLR pos premiseData)
+          in (head matchedId, lab, addr)
+
+        P -> 
+          let usefulData  = filterByPathPi (dropLast pi) allData
+              premiseData = getPremiseN y usefulData
+              matchedId   = traceShowId (filterByPosLR pos premiseData)
+          in (head matchedId, lab, addr)
+
+    -- 2. CASO NON IN GAMMA: Prem x A2+
+    Prem y _ | x == y -> 
+      case pol of
+        P -> 
+          let parentId = dropLast pi
+              usefulData = traceShowId (filterByPathPi (parentId ++ [0]) . filterConcl . filterByPosLR pos $ allData)
+          in (head usefulData, lab, addr)
+
+    Concl ->
+      case pol of
+        P -> 
+            let whichSon = last pi
+                parentId = dropLast pi
+            in 
+                if whichSon == 0
+                    then 
+                         let matchedId = traceShowId (filterByPathPi (parentId ++ [1]) . getPremiseN x . filterByPosLR (pos) $ allData)
+                         in 
+                            (head matchedId, lab, addr)
+                    else
+
+                         let matchedId = traceShowId (filterByPathPi (parentId) . filterConcl . filterByPosLR (pos) $ allData)
+                         in 
+                            (head matchedId, lab, addr)
+        N ->
+            let matchedId = traceShowId (filterByPathPi (pi ++ [1]) . filterConcl . filterByPosLR (pos) $ allData)
+            in
+                (head matchedId, lab, addr)
+
 
 applyRule :: Token -> Rule -> DATA -> Token
 applyRule tok rule allData = case rule of
     TLAMBDA x -> applyLambda x tok allData
     TVAR -> applyVar tok allData
+    TAPP -> applyApp tok allData
     TTENSOR -> applyTensor tok allData
+    TDECOMP x y -> applyDecomp x y tok allData
+    TLET x -> applyLet x tok allData
 
 stopCond :: Token -> Bool
 stopCond ((_, pol, _, _, pi), _, _) = pol == P && null pi
@@ -332,6 +525,10 @@ getTerm (term, _, _, _, _) = term
 
 hasPremise :: String -> DATA -> Bool
 hasPremise y d = not (null (getPremiseN y d))
+
+getVarName :: TypedTerm -> String
+getVarName (TV (TVar name _) _) = name
+getVarName _                     = error "Atteso un TVar all'interno del termine da decomporre"
 ----
 
 findInitials :: DATA -> DATA
