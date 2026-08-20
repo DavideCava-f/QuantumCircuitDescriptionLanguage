@@ -69,7 +69,12 @@ annotate ctx term = case term of
         let argTypes = map getTType tArgs
         -- Controlla se il gate esiste e che tipi restituisce
         retTy <- checkGate name argTypes 
-        return (TGate name tArgs retTy, ctxAfterArgs)
+        let finalArgs = case (name, tArgs) of
+                ("CNOT", [arg1, arg2]) -> 
+                    let pairTy = TPair (getTType arg1) (getTType arg2)
+                    in [TV (TTensor arg1 arg2 pairTy) pairTy]
+                _ -> tArgs
+        return (TGate name finalArgs retTy, ctxAfterArgs)
 
     -- 3. LET: Introduce x, controlla il corpo, poi lo rimuove
     Let x ty val body -> do
