@@ -1,1 +1,1 @@
-\x : qbit. H(x)
+\x : qbit. let y: qbit = X(x) in H(y)

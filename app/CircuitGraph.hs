@@ -7,30 +7,107 @@ import TypeTree (Type(..),Term(..),TypedTerm(..),Value(..),TypedValue(..))
 import CreateDerivation (Prem(..),Concl(..),TypeDerivation(..),Tree(..))
 import Debug.Trace (trace, traceShowId)
 
+--Tipi e data
 type Address = Map.Map String String
 data PosInSeq = Concl | Prem String Int deriving (Show,Eq)
 type PosInPi = Int 
 emptyAddress :: Address
 emptyAddress = Map.empty
+data TransformedGate
+  = SingleGate String Label Label   -- Es. H, X, Y, Z, T con (LabelIn, LabelOut)
+  | FullCNOT Label Label Label Label -- (ControlIn, ControlOut, TargetIn, TargetOut)
+  | GateI Label Label                -- Gate Identità
+  deriving (Show, Eq)
 
-data Rule = TLAMBDA String | TGATE String | TTENSOR | TVAR | TAPP | TDECOMP String String | TLET String deriving (Show)
+type FinalCircuit = [TransformedGate]
+data Rule = TLAMBDA String | TGATE String [TypedTerm] | TTENSOR | TVAR | TAPP | TDECOMP String String | TLET String deriving (Show)
 data Position = L | R deriving (Show, Eq)
 data Polarity = P | N deriving (Show, Eq)
 type Id = (TypedTerm, Polarity, [Position], PosInSeq, [PosInPi])-- deriving (Show)
 data Label = Lab Int deriving (Show,Eq)
 type Token = (Id, Label, Address) 
 type DATA = [Id]
-type Cable = String --Label H Cable | Label Cable | F
-type Circuit = [Cable]
-
+data Cable 
+  = LabelH Label Label Id
+  | LabelX Label Label Id
+  | LabelY Label Label Id
+  | LabelZ Label Label Id
+  | LabelT Label Label Id
+  | LabelI Label Label
+  | LabelCNOT Label Label Id 
+  deriving (Show)
+type CablePair = (Cable, Int)
+type Circuit = [CablePair]
 data TokenState = TokenState
   { tokens   :: [Token]
   , lastLabel :: Int
   } deriving (Show)
+
 emptyTokenState :: TokenState
 emptyTokenState = TokenState [] 0
+------- Final Circuit Builder
 
+isOppositeBranch :: Id -> Id -> Bool
+isOppositeBranch (term1, pol1, posRL1, concl1, list1) (term2, pol2, posRL2, concl2, list2) =
+  
+  pol1 == pol2 && concl1 == concl2 && list1 == list2 &&
 
+  isOppositeRL posRL1 posRL2
+
+-- Helper Controllo se la posizione e' opposta sull'ultimo LR
+isOppositeRL :: [Position] -> [Position] -> Bool
+isOppositeRL [] [] = False
+isOppositeRL [L] [R] = True
+isOppositeRL [R] [L] = True
+isOppositeRL (x:xs) (y:ys) 
+  | x == y    = isOppositeRL xs ys
+  | otherwise = False
+isOppositeRL _ _ = False
+
+-- Trovo il CNOT corrispondente nel Circuit e Creoil FULLCNOT
+findAndRemoveCNOT :: Id -> [CablePair] -> Maybe (Label, Label, [CablePair])
+findAndRemoveCNOT _ [] = Nothing
+findAndRemoveCNOT targetId ((c, labInt):xs) = case c of
+  LabelCNOT lIn2 lOut2 cnotId2 
+    | isOppositeBranch targetId cnotId2 -> 
+        Just (lIn2, lOut2, xs)
+        
+  _ -> case findAndRemoveCNOT targetId xs of
+        Just (lIn2, lOut2, updatedXs) -> Just (lIn2, lOut2, (c, labInt) : updatedXs)
+        Nothing                        -> Nothing
+
+buildFinalCircuit :: [CablePair] -> FinalCircuit
+buildFinalCircuit [] = []
+buildFinalCircuit ((cable, _):rest) = case cable of
+
+  -- Gate Identità e monoargomento
+  LabelI lIn lOut   -> SingleGate "I" lIn lOut : buildFinalCircuit rest
+  LabelH lIn lOut _ -> SingleGate "H" lIn lOut : buildFinalCircuit rest
+  LabelX lIn lOut _ -> SingleGate "X" lIn lOut : buildFinalCircuit rest
+  LabelY lIn lOut _ -> SingleGate "Y" lIn lOut : buildFinalCircuit rest
+  LabelZ lIn lOut _ -> SingleGate "Z" lIn lOut : buildFinalCircuit rest
+  LabelT lIn lOut _ -> SingleGate "T" lIn lOut : buildFinalCircuit rest
+
+  LabelCNOT lIn1 lOut1 cnotId1 ->
+    case findAndRemoveCNOT cnotId1 rest of
+      Just (lIn2, lOut2, remainingCircuit) ->
+        FullCNOT lIn1 lOut1 lIn2 lOut2 : buildFinalCircuit remainingCircuit
+      Nothing -> 
+        error $ "Errore: CNOT DEVE avere la sua parte L o R" ++ show cnotId1
+
+------- SemiCircuit Creation utils
+
+makeCable :: String -> Label -> Label -> Id -> Cable
+makeCable g lIn lOut identifier = case g of
+  "H"    -> LabelH lIn lOut identifier
+  "X"    -> LabelX lIn lOut identifier
+  "Y"    -> LabelY lIn lOut identifier
+  "Z"    -> LabelZ lIn lOut identifier
+  "T"    -> LabelT lIn lOut identifier
+  "CNOT" -> LabelCNOT lIn lOut identifier
+  _      -> error $ "Gate non supportato per Cable: " ++ g
+
+-------- Rule Infer
 inferRule :: Token -> DATA -> Rule
 inferRule token@((term, pol, pos, seq, pi), lab, addr) allData =
   let 
@@ -49,29 +126,23 @@ inferRule token@((term, pol, pos, seq, pi), lab, addr) allData =
       TDecomp z x _ _ _ -> TDECOMP z x
       TApp _ _ _ -> TAPP
       TLet x _ _ _ _ -> TLET x
-      TGate g _ _ -> TGATE g
+      TGate g args _ -> TGATE g args
       _                    -> error "Termine non riconosciuto"
-
+----- Application of Rules, following Paper
 applyGate :: String -> Token -> DATA -> Token
 applyGate g token@((term, pol, pos, seq, pi), lab, addr) allData =
 
   case seq of
 
-    -- ==========================================
-    -- CASO 1: TOKEN IN PREMESSA (Prem z _)
-    -- ==========================================
     Prem z idx ->
       case pol of
-        -- POLARITÀ NEGATIVA (N):
-        -- Trova tra i figli (0 o 1) quello che possiede la premessa 'z'
+
         N ->
           let targetData = filterByPathPi (pi ++ [1]) allData
               premiseData = getPremiseN z targetData
               matchedId   = traceShowId (filterByPosLR pos premiseData)
           in (head matchedId, lab, addr)
 
-        -- POLARITÀ POSITIVA (P):
-        -- Risali al padre (dropLast pi) e cerca la premessa 'z'
         P ->
           let parentPi    = dropLast pi
               parentData  = filterByPathPi parentPi allData
@@ -96,7 +167,7 @@ applyGate g token@((term, pol, pos, seq, pi), lab, addr) allData =
                                 (head matchedId, lab, addr)
             N -> 
                  let matchedId = traceShowId (filterByPathPi (pi) . filterConcl . filterByPosLR (R : (tail pos)) $ allData)
-                 in 
+                 in
                     (head matchedId, lab, addr)
 
 applyApp :: Token -> DATA -> Token
@@ -104,13 +175,9 @@ applyApp token@((term, pol, pos, seq, pi), lab, addr) allData =
 
   case seq of
 
-    -- ==========================================
-    -- CASO 1: TOKEN IN PREMESSA (Prem z _)
-    -- ==========================================
     Prem z idx ->
       case pol of
-        -- POLARITÀ NEGATIVA (N):
-        -- Trova tra i figli (0 o 1) quello che possiede la premessa 'z'
+
         N ->
           let dataChild0 = filterByPathPi (pi ++ [0]) allData
               dataChild1 = filterByPathPi (pi ++ [1]) allData
@@ -123,8 +190,6 @@ applyApp token@((term, pol, pos, seq, pi), lab, addr) allData =
               matchedId   = traceShowId (filterByPosLR pos premiseData)
           in (head matchedId, lab, addr)
 
-        -- POLARITÀ POSITIVA (P):
-        -- Risali al padre (dropLast pi) e cerca la premessa 'z'
         P ->
           let parentPi    = dropLast pi
               parentData  = filterByPathPi parentPi allData
@@ -178,7 +243,7 @@ applyTensor :: Token -> DATA -> Token
 applyTensor token@((term, pol, pos, seq, pi), lab, addr) allData =
   case pol of
     N -> case seq of
-        -- Connetti a elemento negativo che ha come nome quello in seq, trovare quindi il figlio corrispondente (Si presuppone che siano tutti nella premessa i qbit negativi di tensor)
+
        Prem y _ ->
          let -- Recuperiamo i sottoalberi per il figlio 0 e il figlio 1
             dataChild0 = filterByPathPi (pi ++ [0]) allData
@@ -199,7 +264,7 @@ applyTensor token@((term, pol, pos, seq, pi), lab, addr) allData =
     P -> case seq of
         -- Connetti a elemento negativo che ha come nome quello in seq, trovare quindi il figlio corrispondente (Si presuppone che siano tutti nella premessa i qbit negativi di tensor)
        Prem y _ ->
-         let -- Recuperiamo i sottoalberi per il figlio 0 e il figlio 1
+         let -- Recuperiamo i datidel padre
             dataFather = filterByPathPi (dropLast pi) allData
                            
             premiseData = getPremiseN y dataFather
@@ -226,13 +291,8 @@ applyDecomp :: String -> String -> Token -> DATA -> Token
 applyDecomp x y token@((term, pol, pos, seq, pi), lab, addr) allData =
   case seq of
 
-    -- ==========================================
-    -- CASO 1: TOKEN IN PREMESSA (Prem z _)
-    -- ==========================================
     Prem z idx ->
       case pol of
-        -- POLARITÀ NEGATIVA (N):
-        -- Trova tra i figli (0 o 1) quello che possiede la premessa 'z'
         N ->
           let dataChild0 = filterByPathPi (pi ++ [0]) allData
               dataChild1 = filterByPathPi (pi ++ [1]) allData
@@ -245,8 +305,6 @@ applyDecomp x y token@((term, pol, pos, seq, pi), lab, addr) allData =
               matchedId   = traceShowId (filterByPosLR pos premiseData)
           in (head matchedId, lab, addr)
 
-        -- POLARITÀ POSITIVA (P):
-        -- Risali al padre (dropLast pi) e cerca la premessa 'z'
         P ->
           let parentPi    = dropLast pi
               parentData  = filterByPathPi parentPi allData
@@ -254,20 +312,14 @@ applyDecomp x y token@((term, pol, pos, seq, pi), lab, addr) allData =
               matchedId   = traceShowId (filterByPosLR pos premiseData)
           in (head matchedId, lab, addr)
 
-    -- ==========================================
-    -- CASO 2: TOKEN IN CONCLUSIONE (Concl)
-    -- ==========================================
     Concl ->
       case pol of
-        -- POLARITÀ NEGATIVA (N):
-        -- Vai nella conclusione del figlio 1 (pi ++ [1])
         N ->
           let child1Data = filterByPathPi (pi ++ [1]) allData
               conclData  = filterConcl child1Data
               matchedId  = traceShowId (filterByPosLR pos conclData)
           in (head matchedId, lab, addr)
 
-        -- POLARITÀ POSITIVA (P):
         P ->
           let lastIndex = last pi
               parentPi  = dropLast pi
@@ -409,34 +461,93 @@ applyRule tok rule allData = case rule of
     TTENSOR -> applyTensor tok allData
     TDECOMP x y -> applyDecomp x y tok allData
     TLET x -> applyLet x tok allData
-    TGATE g -> applyGate g tok allData 
+    TGATE g term -> applyGate g tok allData 
+
+--------- Token Travelling
 
 stopCond :: Token -> Bool
 stopCond ((_, pol, _, _, pi), _, _) = pol == P && null pi
 
-upgradeCircuit :: Label -> Cable
-upgradeCircuit lab = "I"
 
-travel :: Token -> DATA -> Cable
-travel tok@((term, pol, pos, seq, pi), lab, addr) allData =
-  let rule   = inferRule tok allData
-      newTok = applyRule tok rule allData
+travel :: Token -> DATA -> TokenState -> (Circuit, TokenState)
+travel tok allData st =
+  let rule = inferRule tok allData
+  in case rule of
+    TGATE g term | null term -> --Se e nullo allora deve segnare nel circuito
+      let -- Applica la regola del gate e aggiorna lastlabel e la label di uscita aggiornando il token 
+          ((nextId, currentLab, addr)) = applyGate g tok allData
+          
+         
+          newLblInt = lastLabel st + 1
+          nextLab   = Lab newLblInt
+          
+        
+          newCable  = makeCable g currentLab nextLab nextId
+          cableEntry = (newCable, newLblInt)
+          
+       
+          updatedTok = (nextId, nextLab, addr)
+          updatedSt  = st { lastLabel = newLblInt }
+      in
+        if stopCond updatedTok
+          then ([cableEntry], updatedSt)
+          else 
+            let (restCircuit, finalSt) = travel updatedTok allData updatedSt
+            in (cableEntry : restCircuit, finalSt)
+
+    _ ->
+      -- Per tutte le altre regole non-gate
+      let updatedTok = applyRule tok rule allData
+      in if stopCond updatedTok
+         then ([], st)
+         else travel updatedTok allData st
+
+------ Identity Application
+
+applyInitialIdentity :: Token -> Int -> (Token, CablePair, Int)
+applyInitialIdentity (tokenId, currentLab, addr) currentLastLab =
+  let nextLabInt = currentLastLab + 1
+      labNext    = Lab nextLabInt
+      -- Il cavo va dalla label con cui nasce il token (currentLab) alla nuova label (labNext)
+      initCable  = LabelI currentLab labNext
+      updatedTok = (tokenId, labNext, addr)
+  in (updatedTok, (initCable,nextLabInt), nextLabInt)
+
+
+setupInitialTokens :: [Token] -> Int -> ([Token], [CablePair], Int)
+setupInitialTokens initialToks startLabel =
+  foldl (\(tokAcc, cableAcc, currentLab) tok ->
+            let (newTok, newCablePair, nextLab) = applyInitialIdentity tok currentLab
+            in (tokAcc ++ [newTok], cableAcc ++ [newCablePair], nextLab)
+        ) ([], [], startLabel) initialToks
+
+------- Core Running Machine
+runMachine :: TokenState -> DATA -> FinalCircuit
+runMachine initialState allData = 
+  let 
+    -- Applica Identita' a tutti i cavi iniziali 
+    (preparedTokens, initCables, updatedLastLab) = 
+      setupInitialTokens (tokens initialState) (lastLabel initialState)
+
+    startState = initialState 
+      { tokens    = preparedTokens
+      , lastLabel = updatedLastLab 
+      }
+
+    -- Esegue travel per ciascun token 
+    processToken (accCircuit, st) tok =
+      let (tokCircuit, nextSt) = travel tok allData st
+      in (accCircuit ++ tokCircuit, nextSt)
+
+    (finalCircuit, finalState) = foldl processToken ([], startState) preparedTokens
+
   in 
-    if stopCond newTok 
-      then upgradeCircuit lab
-      else travel newTok allData   
+    -- Ritorna i cavi 'I' iniziali seguiti da tutti gli altri cavi generati
+    let (completeCables,finalState) = (initCables ++ finalCircuit, finalState) in
+    let finalCircuit = buildFinalCircuit completeCables in
+    finalCircuit
 
-
---Running
-
-runMachine :: TokenState -> DATA -> Circuit
-runMachine state allData = map (\t -> travel t allData) (tokens state)
-
-
-
--- Tokens
-
-
+-- StartMachine initializeTokens
 addTokensFromData :: DATA -> TokenState -> TokenState
 addTokensFromData dataList (TokenState currentTokens lastIdx) =
   let 
@@ -448,10 +559,6 @@ addTokensFromData dataList (TokenState currentTokens lastIdx) =
   in 
     TokenState (currentTokens ++ newTokens) updatedLastIdx
 
-
-
-
---Indentify QBITS
 
 startMachine :: TypeDerivation -> DATA
 startMachine derivation =
@@ -471,13 +578,14 @@ startMachine derivation =
             
 --}
 
-
+--- DataExtraction/Indexing
 extractDataRecursive :: TypeDerivation -> [PosInPi] -> DATA
 extractDataRecursive (Node concl forest) pathPi =
     let 
-        -- 1. Estraiamo DATA e NDATA dal nodo corrente (usando il suo pathPi)
+        --Extract current Judgment Data
         currentData = processJudgment concl pathPi
         
+        --Recursive Calls
         processForest :: [TypeDerivation] -> Int -> DATA
         processForest [] _ = []
         processForest (child : cs) idx =
@@ -488,37 +596,37 @@ extractDataRecursive (Node concl forest) pathPi =
         subData = processForest forest 0
             
     in
-        -- 4. Uniamo tutto in un unico grande insieme DATA e NDATA
+        --Create All Datas
         currentData ++ subData
 
 processJudgment :: Concl -> [PosInPi] -> DATA
 processJudgment (prems, conclTerm, typ) pathPi = 
   let
-    -- Launch 1: Processa tutte le premesse (Prem)
+    -- Processa tutte le premesse (Prem)
     premData = processPremises prems conclTerm pathPi
     
-    -- Launch 2: Processa la conclusione (Type)
+    -- Processa la conclusione
     conclData = processConcl conclTerm typ pathPi
   in
-    -- Unisce i risultati di entrambi
+    -- Unisce i risultati
     premData ++ conclData
 
 processPremises :: Prem -> TypedTerm -> [PosInPi] -> DATA
 processPremises premMap typedTerm pathPi =
     processList (Map.toList premMap) 0
   where
-    -- Funzione ausiliaria che scorre la lista di coppie (NomeVariabile, Type)
+    
     processList :: [(String, Type)] -> Int -> DATA
     processList [] _ = []
     processList ((name, typ) : rest) premIdx =
       let 
-        -- 1. Estrae DATA e NDATA per la premessa corrente
+
+        -- Analisi della singola premessa poi di tutte le premesse
         currentD = inspectPremiseType [] True name typ premIdx
         
-        -- 2. Ricorsione sulle premesse rimanenti con indice incrementato
         restD       = processList rest (premIdx + 1)
       in 
-        -- 3. Unisce i risultati direttamente in una singola coppia
+      -- Concatenazione tutti i risultat
         currentD ++ restD
 
     inspectPremiseType :: [Position] -> Bool -> String -> Type -> Int -> DATA
@@ -562,7 +670,7 @@ processConcl typedTerm typ pathPi = inspectType [] True typ
       let d1 = inspectType (lrPath ++ [L]) isPositive t1
           d2 = inspectType (lrPath ++ [R]) isPositive t2
       in d1 ++ d2
-
+-------------------
 --Utils
 dropLast :: [a] -> [a]
 dropLast []       = []
@@ -578,7 +686,7 @@ hasPremise y d = not (null (getPremiseN y d))
 getVarName :: TypedTerm -> String
 getVarName (TV (TVar name _) _) = name
 getVarName _                     = error "Atteso un TVar all'interno del termine da decomporre"
-----
+---- Travelling Utils
 
 findInitials :: DATA -> DATA
 findInitials = filterByPathPi [] . filterByPolarity N

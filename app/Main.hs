@@ -183,11 +183,13 @@ main = do
                                 prettyPrintTokens "TOKSVAR" varToks
                                 prettyPrintTokens "TOKSFINAL" finalToks
                             -}
-                                let toks  = CircuitGraph.tokens tokensState
+                               {- let toks  = CircuitGraph.tokens tokensState
                                 print toks
                                 let resultCables = map (\tok -> travel tok allData) toks
                                 print resultCables
+                                -}
 
+                                let final = runMachine tokensState allData in print final
         [] -> putStrLn "Errore: Devi specificare il nome di un file! (es. cabal run -- file.qqdc)"
 
 
