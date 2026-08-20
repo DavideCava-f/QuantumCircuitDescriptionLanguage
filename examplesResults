@@ -1,0 +1,30 @@
+\x: (qbit -> qbit) -> (qbit -> qbit). x
+[SingleGate "I" (Lab 1) (Lab 5),SingleGate "I" (Lab 2) (Lab 6),SingleGate "I" (Lab 3) (Lab 7),SingleGate "I" (Lab 4) (Lab 8)]
+
+\x : qbit. X(x)
+[SingleGate "I" (Lab 1) (Lab 2),SingleGate "X" (Lab 2) (Lab 3)]
+
+\y: (qbit * qbit). let <z,x> = y in CNOT(H(x),z)
+[SingleGate "I" (Lab 1) (Lab 3),SingleGate "I" (Lab 2) (Lab 4),FullCNOT (Lab 3) (Lab 5) (Lab 6) (Lab 7),SingleGate "H" (Lab 4) (Lab 6)]
+
+\y: qbit. let x : qbit = H(y) in x
+[SingleGate "I" (Lab 1) (Lab 2),SingleGate "H" (Lab 2) (Lab 3)]
+
+\y: qbit. let x : qbit = H(y) in X(x)
+[SingleGate "I" (Lab 1) (Lab 2),SingleGate "H" (Lab 2) (Lab 3),SingleGate "X" (Lab 3) (Lab 4)]
+
+\f: qbit -> qbit.\\x : qbit. \\y : qbit. <x,f y>
+[SingleGate "I" (Lab 1) (Lab 4),SingleGate "I" (Lab 2) (Lab 5),SingleGate "I" (Lab 3) (Lab 6)]
+
+\y: qbit .((\\x : qbit. x) y)
+[SingleGate "I" (Lab 1) (Lab 2)]
+
+\f : (qbit * qbit) -> (qbit * qbit).\\y : (qbit * qbit).(let <z,x> = f y in \\g: qbit -> qbit. <g x,z>)
+[SingleGate "I" (Lab 1) (Lab 6),SingleGate "I" (Lab 2) (Lab 7),SingleGate "I" (Lab 3) (Lab 8),SingleGate "I" (Lab 4) (Lab 9),SingleGate "I" (Lab 5) (Lab 10)]
+
+\f : qbit -> qbit. \\x : qbit * qbit. let <y,z> = x in <f (H(y)) , X(z)>) (\\q : qbit. X(q))
+[SingleGate "I" (Lab 1) (Lab 3),SingleGate "I" (Lab 2) (Lab 4),SingleGate "H" (Lab 3) (Lab 5),SingleGate "X" (Lab 5) (Lab 6),SingleGate "X" (Lab 4) (Lab 7)]
+
+
+\q1 : qbit.\\q2 : qbit.let y : (qbit * qbit) = let x : qbit = H(q1) in CNOT(x,q2) in let <a,b> = y in <H(a),b>
+[SingleGate "I" (Lab 1) (Lab 3),SingleGate "I" (Lab 2) (Lab 4),SingleGate "H" (Lab 3) (Lab 5),FullCNOT (Lab 5) (Lab 6) (Lab 4) (Lab 8),SingleGate "H" (Lab 6) (Lab 7)]
