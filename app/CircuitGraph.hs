@@ -5,7 +5,7 @@ import qualified Data.Map as Map
 import qualified Data.Set as Set
 import TypeTree (Type(..),Term(..),TypedTerm(..),Value(..),TypedValue(..))
 import CreateDerivation (Prem(..),Concl(..),TypeDerivation(..),Tree(..))
-import Debug.Trace (trace, traceShowId)
+import Debug.Trace (trace, traceShow, traceShowId)
 
 --Tipi e data
 type Address = Map.Map String String
@@ -287,6 +287,51 @@ applyTensor token@((term, pol, pos, seq, pi), lab, addr) allData =
              matchedId  = traceShowId (filterByPosLR (lrPrefix : pos) conclData)
         in (head matchedId, lab, addr) -- Ho messo prefisso ma deve essere sempre vuoto [] a questo punto
 
+getVarAtPosition :: String -> String -> Position -> TypedTerm -> Maybe String
+getVarAtPosition x y targetPos (TV (TTensor leftTerm rightTerm _) _)  =
+    let selectedTerm = case targetPos of
+                         L -> leftTerm
+                         R -> rightTerm
+    in if containsVar x selectedTerm
+         then Just x
+         else if containsVar y selectedTerm
+                then Just y
+                else Nothing
+getVarAtPosition x y targetPos (TApp fun arg _) =
+  case getVarAtPosition x y targetPos arg of
+    Just res -> Just res
+    Nothing  -> getVarAtPosition x y targetPos fun
+
+getVarAtPosition x y targetPos (TGate _ (t:ts) ty) =
+  case getVarAtPosition x y targetPos t of
+    Just res -> Just res
+    Nothing  -> getVarAtPosition x y targetPos (TGate "" ts ty)
+
+getVarAtPosition _ _ _ (TGate _ [] _) = Nothing
+
+getVarAtPosition x y targetPos (TLet _ _ val body _) =
+  case getVarAtPosition x y targetPos body of
+    Just res -> Just res
+    Nothing  -> getVarAtPosition x y targetPos val
+
+getVarAtPosition x y targetPos (TDecomp _ _ t1 bodyTerm _) =
+  case getVarAtPosition x y targetPos bodyTerm of
+    Just res -> Just res
+    Nothing  -> getVarAtPosition x y targetPos t1
+
+getVarAtPosition x y targetPos (TV (TVar _ _) _)= Nothing
+getVarAtPosition _ _ _ _ = error "Non trova il tensor"
+
+-- Helper per verificare se un TypedTerm contiene la variabile cercata
+containsVar :: String -> TypedTerm -> Bool
+containsVar targetVar term = case term of
+  TV (TVar name _) _         -> name == targetVar
+  TGate _ args _      -> any (containsVar targetVar) args
+  TV (TTensor t1 t2 _) _     -> containsVar targetVar t1 || containsVar targetVar t2
+  TDecomp _ _ t1 t2 _ -> containsVar targetVar t1 || containsVar targetVar t2
+  _                   -> False
+
+
 applyDecomp :: String -> String -> Token -> DATA -> Token
 applyDecomp x y token@((term, pol, pos, seq, pi), lab, addr) allData =
   case seq of
@@ -333,19 +378,23 @@ applyDecomp x y token@((term, pol, pos, seq, pi), lab, addr) allData =
                -- Se siamo nel Figlio 0: Vai al corrispondente nel Figlio 1
                else let sibling1Pi = parentPi ++ [1]
                         siblingData = filterByPathPi sibling1Pi allData
+                        (siblingTerm, _, _, _, _) = head siblingData
                     in case pos of
-                         -- Se la posizione inizia con L -> premessa della variabile x
-                         (L : ps) ->
-                           let premiseData = getPremiseN x siblingData
-                               matchedId   = traceShowId (filterByPosLR ps premiseData)
-                           in (head matchedId, lab, addr)
+                         (p:ps) ->
+                            let targetPremise = case getVarAtPosition x y p siblingTerm of
+                                                  Just varName -> varName
+                                                  Nothing      -> error "Nessuna variabile trovata nel termine estratto"
+                                premiseData   = getPremiseN targetPremise siblingData
+                                matchedId     = traceShowId (filterByPosLR ps premiseData)
+                            in (head matchedId, lab, addr)
 
-                         -- Se la posizione inizia con R -> premessa della variabile y
+
+                       {-  -- Se la posizione inizia con R -> premessa della variabile y
                          (R : ps) ->
                            let premiseData = getPremiseN y siblingData
                                matchedId   = traceShowId (filterByPosLR ps premiseData)
                            in (head matchedId, lab, addr)
-
+-}
                          [] -> error "Posizione LR vuota per il figlio 0 in Concl (P)"
 
 applyLambda :: String -> Token -> DATA -> Token

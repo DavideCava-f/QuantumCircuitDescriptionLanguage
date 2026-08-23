@@ -1,1 +1,1 @@
-\y: (qbit * qbit). let <z,x> = y in CNOT(H(x),z)
+\f : (qbit * qbit) -> (qbit * qbit). \y: (qbit * qbit). let <x,z> = y in let k : (qbit * qbit) = CNOT(x,X(z)) in f k
