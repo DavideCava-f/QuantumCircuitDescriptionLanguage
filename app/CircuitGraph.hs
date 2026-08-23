@@ -329,6 +329,8 @@ containsVar targetVar term = case term of
   TGate _ args _      -> any (containsVar targetVar) args
   TV (TTensor t1 t2 _) _     -> containsVar targetVar t1 || containsVar targetVar t2
   TDecomp _ _ t1 t2 _ -> containsVar targetVar t1 || containsVar targetVar t2
+  TApp fun arg _ -> containsVar targetVar fun || containsVar targetVar arg
+  TLet _ _ val body _ -> containsVar targetVar val || containsVar targetVar body
   _                   -> False
 
 
