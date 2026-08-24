@@ -1,0 +1,1 @@
+\y:(qbit*qbit). let <z,x> = y in (let k : qbit = H(z) in <k,x>)
