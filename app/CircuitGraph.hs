@@ -380,23 +380,19 @@ applyDecomp x y token@((term, pol, pos, seq, pi), lab, addr) allData =
                -- Se siamo nel Figlio 0: Vai al corrispondente nel Figlio 1
                else let sibling1Pi = parentPi ++ [1]
                         siblingData = filterByPathPi sibling1Pi allData
-                        (siblingTerm, _, _, _, _) = head siblingData
                     in case pos of
-                         (p:ps) ->
-                            let targetPremise = case getVarAtPosition x y p siblingTerm of
-                                                  Just varName -> varName
-                                                  Nothing      -> error "Nessuna variabile trovata nel termine estratto"
-                                premiseData   = getPremiseN targetPremise siblingData
-                                matchedId     = traceShowId (filterByPosLR ps premiseData)
-                            in (head matchedId, lab, addr)
 
+                         (L : ps) ->
+                           let premiseData = getPremiseN x siblingData
+                               matchedId   = traceShowId (filterByPosLR ps premiseData)
+                           in (head matchedId, lab, addr)
 
-                       {-  -- Se la posizione inizia con R -> premessa della variabile y
+                         -- Se la posizione inizia con R -> premessa della variabile y
                          (R : ps) ->
                            let premiseData = getPremiseN y siblingData
                                matchedId   = traceShowId (filterByPosLR ps premiseData)
                            in (head matchedId, lab, addr)
--}
+
                          [] -> error "Posizione LR vuota per il figlio 0 in Concl (P)"
 
 applyLambda :: String -> Token -> DATA -> Token
