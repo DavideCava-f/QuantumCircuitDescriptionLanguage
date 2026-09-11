@@ -1,0 +1,20 @@
+5 Capitoli
+
+Introduzione
+Presentare il problema
+
+2 Presento Un minimo di quantum computing, il modello circuitale, perche e interessante, lambda calcolo senza if then else
+Gap tra modello QRAM e architture vere quantistiche con intero circuito, modo per riconciliare, linguaggio di programmazione adeguandolo che
+le architetture hanno bisogno di circuiti
+Introduzione articolo QRAM modello classico in un linguaggio generico, hardware classico che interagisce con coprecciosse quantistico
+controllo quantistico non c'e. La QPU aspetta e la parte classica spiega, concretamente le architture quantistiche non sono in grado
+archittura quantistica non si aspetta instruzioni, riceve in input un circuito nel suo complesso.
+QRAM knill
+
+
+3 Presentazione della macchina rielaborandola
+
+4 La mia implementazione come l'ho implementato come relazoine di progetto
+
+5 Conclusioni 
+Primo esempio di tool, come puo proseguire il progetto

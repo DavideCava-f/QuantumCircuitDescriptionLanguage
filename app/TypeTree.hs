@@ -1,6 +1,6 @@
 module TypeTree where
 
-import Data.List (sort)
+import Data.List (sort, isPrefixOf)
 
 type Name = String
 
@@ -12,6 +12,7 @@ data Term
   | Let Name Type Term Term -- let x = q1 in H(x)
   | Decomp Name Name Term Term  -- let <x,y> = t in t
   | If Term Term Term
+  | New Int
   | Gate String [Term]          -- Per U(v1...vn) come H, X, CNOT
   | V Value
   deriving (Show)
@@ -32,6 +33,7 @@ data TypedValue
 data TypedTerm
   = TV TypedValue Type
   | TApp TypedTerm TypedTerm Type
+  | TNew Int String Type
   | TGate String [TypedTerm] Type
   | TLet Name Type TypedTerm TypedTerm Type
   | TDecomp Name Name TypedTerm TypedTerm Type
@@ -131,6 +133,15 @@ annotate ctx term = case term of
                         if tyThen /= tyElse
                             then Left "Errore: i rami dell'IF restituiscono tipi diversi."
                             else return (TIf tCond tThen tElse tyThen, ctxThen)
+    --7New
+    New n -> 
+      if n == 0 || n == 1
+        then 
+          let -- Genera un nome univoco basato sulle variabili già presenti nel contesto
+              count = length [ k | (k, _) <- ctx, "new_" `isPrefixOf` k ]
+              varId = "new_" ++ show n ++ "_" ++ show (count + 1)
+          in Right (TNew n varId TQbit, ctx)
+        else Left $ "Errore di tipo: 'new' accetta solo 0 o 1, ricevuto: " ++ show n
 
 type Context = [(Name, Type)]
 
@@ -157,6 +168,7 @@ annotateList ctx (t:ts) = do
 --Ritorna il tipo
 getTType :: TypedTerm -> Type
 getTType (TV _ t) = t
+getTType (TNew _ _ t) = t
 getTType (TApp _ _ t) = t
 getTType (TGate _ _ t) = t
 getTType (TLet _ _ _ _ t) = t

@@ -29,6 +29,12 @@ buildDerivation prem term = case term of
   -- Caso TV: Derivazione valore
   TV innerTerm t ->  buildDerivationV prem innerTerm t
 
+  TNew n varId t ->
+    Node
+      { rootLabel = (Map.empty, TNew n varId t, t)
+      , subForest = []
+      }
+
   -- Caso TGate: Risolve le premesse ricorsivamente per ogni argomento, oltre che aggiungere il tipo del gate
   TGate g args t -> 
     let 
@@ -120,6 +126,7 @@ buildDerivationV prem val t = case val of
       }
 
 
+
   -- Caso TLambda: Estende il contesto (Prem) con la nuova variabile 'y'
   TLambda y argT body lamType -> 
     let extPrem  = Map.insert y argT prem
@@ -143,6 +150,7 @@ buildDerivationV prem val t = case val of
 freeVarsTerm :: TypedTerm -> Set.Set String
 freeVarsTerm term = case term of
   TV val _                 -> freeVarsVal val
+  TNew _ _ _               -> Set.empty
   TGate _ args _           -> Set.unions (map freeVarsTerm args)
   TApp f arg _             -> Set.union (freeVarsTerm f) (freeVarsTerm arg)
   TLet x _ val body _      -> Set.union (freeVarsTerm val) (Set.delete x (freeVarsTerm body))
@@ -238,6 +246,7 @@ showTermPretty :: TypedTerm -> String
 showTermPretty term = case term of
   TV val _                   -> showValPretty val
   TGate g args _             -> g ++ "(" ++ intercalate ", " (map showTermPretty args) ++ ")"
+  TNew n varId _             -> varId
   TApp f arg _               -> "(" ++ showTermPretty f ++ " " ++ showTermPretty arg ++ ")"
   TLet x _ val body _        -> "let " ++ x ++ " = " ++ showTermPretty val ++ " in " ++ showTermPretty body
   TDecomp x y pair body _    -> "let (" ++ x ++ ", " ++ y ++ ") = " ++ showTermPretty pair ++ " in " ++ showTermPretty body

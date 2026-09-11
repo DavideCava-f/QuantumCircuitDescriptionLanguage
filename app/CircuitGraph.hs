@@ -18,7 +18,7 @@ data TransformedGate
   | FullCNOT Label Label Label Label -- (ControlIn, ControlOut, TargetIn, TargetOut)
   | GateI Label Label                -- Gate Identità
   deriving (Show, Eq)
-
+type TokenLabelList = [(Id, Label)]
 type FinalCircuit = [TransformedGate]
 data Rule = TLAMBDA String | TGATE String [TypedTerm] | TTENSOR | TVAR | TAPP | TDECOMP String String | TLET String deriving (Show)
 data Position = L | R deriving (Show, Eq)
@@ -33,6 +33,7 @@ data Cable
   | LabelY Label Label Id
   | LabelZ Label Label Id
   | LabelT Label Label Id
+  | LabelM Label Label Id
   | LabelI Label Label
   | LabelCNOT Label Label Id 
   deriving (Show)
@@ -82,6 +83,7 @@ buildFinalCircuit ((cable, _):rest) = case cable of
 
   -- Gate Identità e monoargomento
   LabelI lIn lOut   -> SingleGate "I" lIn lOut : buildFinalCircuit rest
+  LabelM lIn lOut _ -> SingleGate "M" lIn lOut : buildFinalCircuit rest
   LabelH lIn lOut _ -> SingleGate "H" lIn lOut : buildFinalCircuit rest
   LabelX lIn lOut _ -> SingleGate "X" lIn lOut : buildFinalCircuit rest
   LabelY lIn lOut _ -> SingleGate "Y" lIn lOut : buildFinalCircuit rest
@@ -104,6 +106,7 @@ makeCable g lIn lOut identifier = case g of
   "Y"    -> LabelY lIn lOut identifier
   "Z"    -> LabelZ lIn lOut identifier
   "T"    -> LabelT lIn lOut identifier
+  "M"    -> LabelM lIn lOut identifier
   "CNOT" -> LabelCNOT lIn lOut identifier
   _      -> error $ "Gate non supportato per Cable: " ++ g
 
@@ -563,7 +566,7 @@ applyInitialIdentity (tokenId, currentLab, addr) currentLastLab =
 
 setupInitialTokens :: [Token] -> Int -> ([Token], [CablePair], Int)
 setupInitialTokens initialToks startLabel =
-  foldl (\(tokAcc, cableAcc, currentLab) tok ->
+  foldl (\(tokAcc, cableAcc, currentLab) tok@(tokenId, _, _) ->
             let (newTok, newCablePair, nextLab) = applyInitialIdentity tok currentLab
             in (tokAcc ++ [newTok], cableAcc ++ [newCablePair], nextLab)
         ) ([], [], startLabel) initialToks
@@ -592,19 +595,19 @@ runMachine initialState allData =
     -- Ritorna i cavi 'I' iniziali seguiti da tutti gli altri cavi generati
     let (completeCables,finalState) = (initCables ++ finalCircuit, finalState) in
     let finalCircuit = buildFinalCircuit completeCables in
-    finalCircuit
+        finalCircuit
 
 -- StartMachine initializeTokens
-addTokensFromData :: DATA -> TokenState -> TokenState
+addTokensFromData :: DATA -> TokenState -> (TokenState, [(Id,Label)])
 addTokensFromData dataList (TokenState currentTokens lastIdx) =
   let 
     -- Genera i nuovi token partendo da (lastIdx + 1)
     newTokens = zipWith (\id' idx -> (id', Lab idx, emptyAddress)) dataList [lastIdx + 1 ..]
-    
+    assocList = map (\(id', lab, _) -> (id', lab)) newTokens   
     -- L'ultimo indice diventa lastIdx + elementi aggiunti
     updatedLastIdx = lastIdx + length dataList
   in 
-    TokenState (currentTokens ++ newTokens) updatedLastIdx
+    ((TokenState (currentTokens ++ newTokens) updatedLastIdx), assocList)
 
 
 startMachine :: TypeDerivation -> DATA
@@ -708,6 +711,13 @@ processConcl typedTerm typ pathPi = inspectType [] True typ
         else
             let currentId = (typedTerm, N, lrPath, Concl, pathPi) in [currentId]
 
+    inspectType lrPath isPositive TBit =
+      if isPositive
+        then 
+            let currentId = (typedTerm, P, lrPath, Concl, pathPi) in [currentId]
+        else
+            let currentId = (typedTerm, N, lrPath, Concl, pathPi) in [currentId]
+
     inspectType lrPath isPositive (TFun t1 t2) =
       let d1 = inspectType (lrPath ++ [L]) (not isPositive) t1
           d2 = inspectType (lrPath ++ [R]) isPositive t2
@@ -736,7 +746,20 @@ getVarName _                     = error "Atteso un TVar all'interno del termine
 ---- Travelling Utils
 
 findInitials :: DATA -> DATA
-findInitials = filterByPathPi [] . filterByPolarity N
+findInitials allData =
+  let 
+
+    rootPremiseTokens = filterByPathPi [] . filterByPolarity N $ allData
+
+    newTokens = filter isNewPositive allData
+  in 
+    rootPremiseTokens ++ newTokens
+  where
+    isNewPositive (term, pol, _, _, _) = 
+      pol == P && case term of
+                    TNew _ _ _ -> True
+                    _          -> False
+
 
 findFirstLevel :: DATA -> DATA
 findFirstLevel = filterByPathPi [0] . filterByPolarity P

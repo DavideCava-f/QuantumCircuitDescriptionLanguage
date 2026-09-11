@@ -24,8 +24,11 @@ lexeme = L.lexeme sc
 symbol :: String -> Parser String
 symbol = L.symbol sc
 
+integer :: Parser Int
+integer = lexeme L.decimal
+
 reservedWords :: [String]
-reservedWords = ["let", "in", "if", "then", "else", "bit", "qbit"]
+reservedWords = ["let", "in", "if", "then", "else", "bit", "qbit", "new"]
 
 -- Parser per identificatori 
 identifier :: Parser String

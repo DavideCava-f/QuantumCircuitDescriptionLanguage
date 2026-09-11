@@ -35,7 +35,9 @@ pType = do
 ---- Term Parser
 
 termParser :: Parser Term
-termParser = try letParser <|> try decompParser <|> try ifParser <|> try gateParser <|> applicationParser
+termParser = try letParser <|> try decompParser <|> try ifParser <|> try newParser <|> try gateParser <|> applicationParser
+
+
 
 letParser :: Parser Term
 letParser = do
@@ -72,6 +74,14 @@ ifParser = do
     rWord "else"
     t2 <- termParser
     return(If v t1 t2)
+
+newParser :: Parser Term
+newParser = do
+    rWord "new"
+    val <- parens integer <|> integer
+    if val == 0 || val == 1
+        then return (New val)
+        else fail "L'argomento di 'new' deve essere 0 oppure 1"
 
 validGates :: Parser String
 validGates = choice [ string "H"
@@ -162,7 +172,7 @@ main = do
             case Text.Megaparsec.runParser mainParser "" contenuto of
                 Left err -> putStrLn $ "Errore di Sintassi: " ++ show err
                 Right ast -> do
-        --            pPrint ast
+                    pPrint ast
                     let initialCtx = [("q1", TQbit), ("q2", TQbit), ("q3", TQbit)]
                     case annotate initialCtx ast of
                         Left typeErr -> putStrLn $ "Errore di Tipo/Linearità: " ++ typeErr
@@ -173,7 +183,8 @@ main = do
                                 let allData = startMachine c
                                 prettyPrintData "DATA" allData
                                 let initials = findInitials allData 
-                                let tokensState = addTokensFromData initials emptyTokenState
+                                let (tokensState, assocList) = addTokensFromData initials emptyTokenState
+                                print assocList
                            {-   let testtoks = CircuitGraph.tokens tokensState                                
                                 let restoks = map (\tok -> applyLambda "y" tok allData) testtoks 
                                 let varToks = map (\tok -> applyVar tok allData) restoks
