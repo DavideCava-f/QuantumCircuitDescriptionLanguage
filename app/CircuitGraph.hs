@@ -609,8 +609,17 @@ addTokensFromData dataList (TokenState currentTokens lastIdx) =
   in 
     ((TokenState (currentTokens ++ newTokens) updatedLastIdx), assocList)
 
-
-startMachine :: TypeDerivation -> DATA
+startMachine :: TypeDerivation -> (FinalCircuit, TokenLabelList)
+startMachine derivation =
+  let
+    allData                   = extractDataRecursive derivation []
+    initials                  = findInitials allData
+    (tokensState, assocList)  = addTokensFromData initials emptyTokenState
+    final                     = runMachine tokensState allData
+  in
+    (final, assocList)
+{-
+startMachine :: TypeDerivation -> (FinalCircuit,TokenLabelList)
 startMachine derivation =
     let
         allData = extractDataRecursive derivation []
@@ -618,16 +627,18 @@ startMachine derivation =
         let 
             initials = findInitials allData
         in 
-            allData
-            
-{--
+            prettyPrintData "DATA" allData
             let 
-                activeTokens = addTokensFromData initials (emptyTokenState)
-            in
-                runMachine activeTokens allData
-            
---}
-
+                initials = findInitials allData
+            in 
+                let
+                    (tokensState, assocList) = addTokensFromData initials emptyTokenState 
+                in
+                    let
+                        final = runMachine tokensState allData 
+                    in 
+                        (final, assocList)
+-}
 --- DataExtraction/Indexing
 extractDataRecursive :: TypeDerivation -> [PosInPi] -> DATA
 extractDataRecursive (Node concl forest) pathPi =
@@ -851,3 +862,15 @@ prettyPrintTokens title toks = do
                 ++ " | LR: " ++ show pos 
                 ++ " | Pi: " ++ show pi 
                 ++ " | Term: " ++ show term
+
+formatTokenLabelList :: [(Id, Label)] -> String
+formatTokenLabelList assocList = 
+  unlines $ "--- TOKEN - LABEL ASSOC LIST ---" : map formatEntry assocList
+  where
+    formatEntry ((_, pol, pos, seq, pi), label) = 
+      "  Token (" ++ show pol ++ ", " ++ show pos ++ ", " ++ show seq ++ ", " ++ show pi ++ ") ==> " ++ show label
+
+-- Funzione IO per stampare direttamente a schermo
+prettyPrintAssocList :: [(Id, Label)] -> IO ()
+prettyPrintAssocList assocList = putStrLn (formatTokenLabelList assocList)
+

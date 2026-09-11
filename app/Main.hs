@@ -172,37 +172,31 @@ main = do
             case Text.Megaparsec.runParser mainParser "" contenuto of
                 Left err -> putStrLn $ "Errore di Sintassi: " ++ show err
                 Right ast -> do
-                    pPrint ast
+--                    pPrint ast
                     let initialCtx = [("q1", TQbit), ("q2", TQbit), ("q3", TQbit)]
                     case annotate initialCtx ast of
                         Left typeErr -> putStrLn $ "Errore di Tipo/Linearità: " ++ typeErr
                         Right (typedAST, remainingCtx) -> do
-                            pPrint typedAST
+  --                          pPrint typedAST
                             let c = startDerivation typedAST in do
-                                printDerivation c
-                                let allData = startMachine c
-                                prettyPrintData "DATA" allData
-                                let initials = findInitials allData 
-                                let (tokensState, assocList) = addTokensFromData initials emptyTokenState
-                                print assocList
-                           {-   let testtoks = CircuitGraph.tokens tokensState                                
-                                let restoks = map (\tok -> applyLambda "y" tok allData) testtoks 
-                                let varToks = map (\tok -> applyVar tok allData) restoks
-                                let finalToks = map (\tok -> applyLambda "y" tok allData) varToks
-                                prettyPrintTokens "TOKSSTART" testtoks
-                                prettyPrintTokens "TOKSLAMBDA" restoks
-                                prettyPrintTokens "TOKSVAR" varToks
-                                prettyPrintTokens "TOKSFINAL" finalToks
-                            -}
-                               {- let toks  = CircuitGraph.tokens tokensState
-                                print toks
-                                let resultCables = map (\tok -> travel tok allData) toks
-                                print resultCables
-                                -}
-
-                                let final = runMachine tokensState allData in print final
+--                                printDerivation c
+                                let (final, assocList) = startMachine c
+                                print final
+                                prettyPrintRootType c
+                                prettyPrintAssocList assocList
         [] -> putStrLn "Errore: Devi specificare il nome di un file! (es. cabal run -- file.qqdc)"
 
 
+-- Printing Root Type
+getRootType :: TypeDerivation -> Type
+getRootType derivation = 
+  let (_, _, rootType) = rootLabel derivation
+  in rootType
+
+formatRootType :: TypeDerivation -> String
+formatRootType derivation = "Root Type: " ++ show (getRootType derivation)
+
+prettyPrintRootType :: TypeDerivation -> IO ()
+prettyPrintRootType derivation = putStrLn (formatRootType derivation)
 
 
