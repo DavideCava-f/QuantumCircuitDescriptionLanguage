@@ -180,10 +180,10 @@ main = do
   --                          pPrint typedAST
                             let c = startDerivation typedAST in do
 --                                printDerivation c
-                                let (final, assocList) = startMachine c
+                                let (final, assocList, finalList) = startMachine c
                                 print final
                                 prettyPrintRootType c
-                                prettyPrintAssocList assocList
+                                prettyPrintAssocList assocList finalList
         [] -> putStrLn "Errore: Devi specificare il nome di un file! (es. cabal run -- file.qqdc)"
 
 

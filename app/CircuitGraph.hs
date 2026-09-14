@@ -519,7 +519,7 @@ stopCond :: Token -> Bool
 stopCond ((_, pol, _, _, pi), _, _) = pol == P && null pi
 
 
-travel :: Token -> DATA -> TokenState -> (Circuit, TokenState)
+travel :: Token -> DATA -> TokenState -> (Circuit, TokenState, TokenLabelList)
 travel tok allData st =
   let rule = inferRule tok allData
   in case rule of
@@ -540,16 +540,16 @@ travel tok allData st =
           updatedSt  = st { lastLabel = newLblInt }
       in
         if stopCond updatedTok
-          then ([cableEntry], updatedSt)
+          then ([cableEntry], updatedSt, [(nextId,nextLab)])
           else 
-            let (restCircuit, finalSt) = travel updatedTok allData updatedSt
-            in (cableEntry : restCircuit, finalSt)
+            let (restCircuit, finalSt, finalTokLabList) = travel updatedTok allData updatedSt
+            in (cableEntry : restCircuit, finalSt, finalTokLabList)
 
     _ ->
       -- Per tutte le altre regole non-gate
-      let updatedTok = applyRule tok rule allData
+      let updatedTok@(finalId,finalLab,_) = applyRule tok rule allData
       in if stopCond updatedTok
-         then ([], st)
+         then ([], st,[(finalId,finalLab)])
          else travel updatedTok allData st
 
 ------ Identity Application
@@ -572,7 +572,7 @@ setupInitialTokens initialToks startLabel =
         ) ([], [], startLabel) initialToks
 
 ------- Core Running Machine
-runMachine :: TokenState -> DATA -> FinalCircuit
+runMachine :: TokenState -> DATA -> (FinalCircuit, [(Id,Label)])
 runMachine initialState allData = 
   let 
     -- Applica Identita' a tutti i cavi iniziali 
@@ -585,17 +585,17 @@ runMachine initialState allData =
       }
 
     -- Esegue travel per ciascun token 
-    processToken (accCircuit, st) tok =
-      let (tokCircuit, nextSt) = travel tok allData st
-      in (accCircuit ++ tokCircuit, nextSt)
+    processToken (accCircuit, st, accList) tok =
+      let (tokCircuit, nextSt, tokList) = travel tok allData st
+      in (accCircuit ++ tokCircuit, nextSt, accList ++ tokList)
 
-    (finalCircuit, finalState) = foldl processToken ([], startState) preparedTokens
+    (finalCircuit, finalState, finalAccList) = foldl processToken ([], startState, []) preparedTokens
 
   in 
     -- Ritorna i cavi 'I' iniziali seguiti da tutti gli altri cavi generati
     let (completeCables,finalState) = (initCables ++ finalCircuit, finalState) in
     let finalCircuit = buildFinalCircuit completeCables in
-        finalCircuit
+        (finalCircuit, finalAccList)
 
 -- StartMachine initializeTokens
 addTokensFromData :: DATA -> TokenState -> (TokenState, [(Id,Label)])
@@ -609,15 +609,15 @@ addTokensFromData dataList (TokenState currentTokens lastIdx) =
   in 
     ((TokenState (currentTokens ++ newTokens) updatedLastIdx), assocList)
 
-startMachine :: TypeDerivation -> (FinalCircuit, TokenLabelList)
+startMachine :: TypeDerivation -> (FinalCircuit, TokenLabelList, TokenLabelList)
 startMachine derivation =
   let
     allData                   = extractDataRecursive derivation []
     initials                  = findInitials allData
     (tokensState, assocList)  = addTokensFromData initials emptyTokenState
-    final                     = runMachine tokensState allData
+    (final, finalList)        = runMachine tokensState allData
   in
-    (final, assocList)
+    (final, assocList, finalList)
 {-
 startMachine :: TypeDerivation -> (FinalCircuit,TokenLabelList)
 startMachine derivation =
@@ -870,7 +870,17 @@ formatTokenLabelList assocList =
     formatEntry ((_, pol, pos, seq, pi), label) = 
       "  Token (" ++ show pol ++ ", " ++ show pos ++ ", " ++ show seq ++ ", " ++ show pi ++ ") ==> " ++ show label
 
+formatTokenAssoc :: (Id, Label) -> String
+formatTokenAssoc ((_, pol, pos, seq, pi), lab) =
+  "(" ++ show pol ++ ", " ++ show pos ++ ", " ++ show seq ++ ", " ++ show pi ++ ", " ++ show lab ++ ")"
+
+prettyPrintLists :: [(Id, Label)] -> [(Id, Label)] -> String
+prettyPrintLists [] [] = ""
+prettyPrintLists ((idStart, labStart):xs) ((idEnd, labEnd):ys) =
+  formatTokenAssoc (idStart, labStart) ++ " ends in " ++ formatTokenAssoc (idEnd, labEnd) ++ "\n" ++ prettyPrintLists xs ys
+prettyPrintLists _ _ = ""
+
 -- Funzione IO per stampare direttamente a schermo
-prettyPrintAssocList :: [(Id, Label)] -> IO ()
-prettyPrintAssocList assocList = putStrLn (formatTokenLabelList assocList)
+prettyPrintAssocList :: [(Id, Label)] -> [(Id,Label)] -> IO ()
+prettyPrintAssocList initList endingList = putStrLn (prettyPrintLists initList endingList)
 

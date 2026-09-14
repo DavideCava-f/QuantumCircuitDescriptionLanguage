@@ -1,136 +1,84 @@
-====Basic.qqdc====
-\x: (qbit -> qbit) -> (qbit -> qbit). x
-----------------
 Argomenti ricevuti: ["Basic.qqdc"]
 FILE: "\\x: (qbit -> qbit) -> (qbit -> qbit). x\n"
 [SingleGate "I" (Lab 1) (Lab 5),SingleGate "I" (Lab 2) (Lab 6),SingleGate "I" (Lab 3) (Lab 7),SingleGate "I" (Lab 4) (Lab 8)]
 Root Type: TFun (TFun (TFun TQbit TQbit) (TFun TQbit TQbit)) (TFun (TFun TQbit TQbit) (TFun TQbit TQbit))
---- TOKEN - LABEL ASSOC LIST ---
-  Token (N, [L,L,L], Concl, []) ==> Lab 1
-  Token (N, [L,R,R], Concl, []) ==> Lab 2
-  Token (N, [R,L,R], Concl, []) ==> Lab 3
-  Token (N, [R,R,L], Concl, []) ==> Lab 4
+(N, [L,L,L], Concl, [], Lab 1) ends in (P, [R,L,L], Concl, [], Lab 5)
+(N, [L,R,R], Concl, [], Lab 2) ends in (P, [R,R,R], Concl, [], Lab 6)
+(N, [R,L,R], Concl, [], Lab 3) ends in (P, [L,L,R], Concl, [], Lab 7)
+(N, [R,R,L], Concl, [], Lab 4) ends in (P, [L,R,L], Concl, [], Lab 8)
 
-====ComplexDecomp.qqdc====
-\y:(qbit*qbit). let <z,x> = y in (let k : qbit = H(z) in <k,x>)
-----------------
 Argomenti ricevuti: ["ComplexDecomp.qqdc"]
 FILE: "\\y:(qbit*qbit). let <z,x> = y in (let k : qbit = H(z) in <k,x>)\n"
 [SingleGate "I" (Lab 1) (Lab 3),SingleGate "I" (Lab 2) (Lab 4),SingleGate "H" (Lab 3) (Lab 5)]
 Root Type: TFun (TPair TQbit TQbit) (TPair TQbit TQbit)
---- TOKEN - LABEL ASSOC LIST ---
-  Token (N, [L,L], Concl, []) ==> Lab 1
-  Token (N, [L,R], Concl, []) ==> Lab 2
+(N, [L,L], Concl, [], Lab 1) ends in (P, [R,L], Concl, [], Lab 5)
+(N, [L,R], Concl, [], Lab 2) ends in (P, [R,R], Concl, [], Lab 4)
 
-====ComplexNoApp.qqdc====
-\q1 : qbit.\q2 : qbit.let y : (qbit * qbit) = let x : qbit = H(q1) in CNOT(x,q2) in let <a,b> = y in <H(a),b>
-----------------
 Argomenti ricevuti: ["ComplexNoApp.qqdc"]
 FILE: "\\q1 : qbit.\\q2 : qbit.let y : (qbit * qbit) = let x : qbit = H(q1) in CNOT(x,q2) in let <a,b> = y in <H(a),b>\n"
 [SingleGate "I" (Lab 1) (Lab 3),SingleGate "I" (Lab 2) (Lab 4),SingleGate "H" (Lab 3) (Lab 5),FullCNOT (Lab 5) (Lab 6) (Lab 4) (Lab 8),SingleGate "H" (Lab 6) (Lab 7)]
 Root Type: TFun TQbit (TFun TQbit (TPair TQbit TQbit))
---- TOKEN - LABEL ASSOC LIST ---
-  Token (N, [L], Concl, []) ==> Lab 1
-  Token (N, [R,L], Concl, []) ==> Lab 2
+(N, [L], Concl, [], Lab 1) ends in (P, [R,R,L], Concl, [], Lab 7)
+(N, [R,L], Concl, [], Lab 2) ends in (P, [R,R,R], Concl, [], Lab 8)
 
-
-====FunctionPair.qqdc====
-(\f : qbit -> qbit. \x : qbit * qbit. let <y,z> = x in <f (H(y)) , X(z)>) (\q : qbit. X(q))
-----------------
 Argomenti ricevuti: ["FunctionPair.qqdc"]
 FILE: "(\\f : qbit -> qbit. \\x : qbit * qbit. let <y,z> = x in <f (H(y)) , X(z)>) (\\q : qbit. X(q))\n"
 [SingleGate "I" (Lab 1) (Lab 3),SingleGate "I" (Lab 2) (Lab 4),SingleGate "H" (Lab 3) (Lab 5),SingleGate "X" (Lab 5) (Lab 6),SingleGate "X" (Lab 4) (Lab 7)]
 Root Type: TFun (TPair TQbit TQbit) (TPair TQbit TQbit)
---- TOKEN - LABEL ASSOC LIST ---
-  Token (N, [L,L], Concl, []) ==> Lab 1
-  Token (N, [L,R], Concl, []) ==> Lab 2
+(N, [L,L], Concl, [], Lab 1) ends in (P, [R,L], Concl, [], Lab 6)
+(N, [L,R], Concl, [], Lab 2) ends in (P, [R,R], Concl, [], Lab 7)
 
-====LambdaApp.qqdc====
-(\f:(qbit -> qbit).\x: qbit*qbit. (let <y,z> = x in <X(y),f z>)) (\x: qbit.H(x))
-----------------
 Argomenti ricevuti: ["LambdaApp.qqdc"]
 FILE: "(\\f:(qbit -> qbit).\\x: qbit*qbit. (let <y,z> = x in <X(y),f z>)) (\\x: qbit.H(x))\n"
 [SingleGate "I" (Lab 1) (Lab 3),SingleGate "I" (Lab 2) (Lab 4),SingleGate "X" (Lab 3) (Lab 5),SingleGate "H" (Lab 4) (Lab 6)]
 Root Type: TFun (TPair TQbit TQbit) (TPair TQbit TQbit)
---- TOKEN - LABEL ASSOC LIST ---
-  Token (N, [L,L], Concl, []) ==> Lab 1
-  Token (N, [L,R], Concl, []) ==> Lab 2
+(N, [L,L], Concl, [], Lab 1) ends in (P, [R,L], Concl, [], Lab 5)
+(N, [L,R], Concl, [], Lab 2) ends in (P, [R,R], Concl, [], Lab 6)
 
-====LambdaCNOTApp.qqdc====
-\x : qbit. \y : qbit. CNOT(x,y)
-----------------
 Argomenti ricevuti: ["LambdaCNOTApp.qqdc"]
 FILE: "\\x : qbit. \\y : qbit. CNOT(x,y)\n"
 [SingleGate "I" (Lab 1) (Lab 3),SingleGate "I" (Lab 2) (Lab 4),FullCNOT (Lab 3) (Lab 5) (Lab 4) (Lab 6)]
 Root Type: TFun TQbit (TFun TQbit (TPair TQbit TQbit))
---- TOKEN - LABEL ASSOC LIST ---
-  Token (N, [L], Concl, []) ==> Lab 1
-  Token (N, [R,L], Concl, []) ==> Lab 2
+(N, [L], Concl, [], Lab 1) ends in (P, [R,R,L], Concl, [], Lab 5)
+(N, [R,L], Concl, [], Lab 2) ends in (P, [R,R,R], Concl, [], Lab 6)
 
-
-====LambdaMeasure.qqdc====
-\x: qbit. M(x)
-----------------
 Argomenti ricevuti: ["LambdaMeasure.qqdc"]
 FILE: "\\x: qbit. M(x)\n"
 [SingleGate "I" (Lab 1) (Lab 2),SingleGate "M" (Lab 2) (Lab 3)]
 Root Type: TFun TQbit TBit
---- TOKEN - LABEL ASSOC LIST ---
-  Token (N, [L], Concl, []) ==> Lab 1
+(N, [L], Concl, [], Lab 1) ends in (P, [R], Concl, [], Lab 3)
 
-====LambdaPairLet.qqdc====
-\y: (qbit * qbit). let <z,x> = y in CNOT(H(x),z)
-----------------
 Argomenti ricevuti: ["LambdaPairLet.qqdc"]
 FILE: "\\y: (qbit * qbit). let <z,x> = y in CNOT(H(x),z)\n"
 [SingleGate "I" (Lab 1) (Lab 3),SingleGate "I" (Lab 2) (Lab 4),FullCNOT (Lab 3) (Lab 5) (Lab 6) (Lab 7),SingleGate "H" (Lab 4) (Lab 6)]
 Root Type: TFun (TPair TQbit TQbit) (TPair TQbit TQbit)
---- TOKEN - LABEL ASSOC LIST ---
-  Token (N, [L,L], Concl, []) ==> Lab 1
-  Token (N, [L,R], Concl, []) ==> Lab 2
+(N, [L,L], Concl, [], Lab 1) ends in (P, [R,R], Concl, [], Lab 5)
+(N, [L,R], Concl, [], Lab 2) ends in (P, [R,L], Concl, [], Lab 7)
 
-====LambdaPort.qqdc====
-\x : qbit. X(x)
-----------------
 Argomenti ricevuti: ["LambdaPort.qqdc"]
 FILE: "\\x : qbit. X(x)\n"
 [SingleGate "I" (Lab 1) (Lab 2),SingleGate "X" (Lab 2) (Lab 3)]
 Root Type: TFun TQbit TQbit
---- TOKEN - LABEL ASSOC LIST ---
-  Token (N, [L], Concl, []) ==> Lab 1
+(N, [L], Concl, [], Lab 1) ends in (P, [R], Concl, [], Lab 3)
 
-====newTest.qqdc====
-CNOT(new(0),H(new(1)))
-----------------
 Argomenti ricevuti: ["newTest.qqdc"]
 FILE: "CNOT(new(0),H(new(1)))\n"
 [SingleGate "I" (Lab 1) (Lab 3),SingleGate "I" (Lab 2) (Lab 4),FullCNOT (Lab 3) (Lab 5) (Lab 6) (Lab 7),SingleGate "H" (Lab 4) (Lab 6)]
 Root Type: TPair TQbit TQbit
---- TOKEN - LABEL ASSOC LIST ---
-  Token (P, [], Concl, [1,0]) ==> Lab 1
-  Token (P, [], Concl, [1,1,1]) ==> Lab 2
+(P, [], Concl, [1,0], Lab 1) ends in (P, [L], Concl, [], Lab 5)
+(P, [], Concl, [1,1,1], Lab 2) ends in (P, [R], Concl, [], Lab 7)
 
-
-====SimpleLet.qqdc====
-\y: qbit. let x : qbit = H(y) in X(x)
-----------------
 Argomenti ricevuti: ["SimpleLet.qqdc"]
 FILE: "\\y: qbit. let x : qbit = H(y) in X(x)\n"
 [SingleGate "I" (Lab 1) (Lab 2),SingleGate "H" (Lab 2) (Lab 3),SingleGate "X" (Lab 3) (Lab 4)]
 Root Type: TFun TQbit TQbit
---- TOKEN - LABEL ASSOC LIST ---
-  Token (N, [L], Concl, []) ==> Lab 1
+(N, [L], Concl, [], Lab 1) ends in (P, [R], Concl, [], Lab 4)
 
-
-====Tensor.qqdc====
-\f: qbit -> qbit.\x : qbit. \y : qbit. <x,f y>
-----------------
 Argomenti ricevuti: ["Tensor.qqdc"]
 FILE: "\\f: qbit -> qbit.\\x : qbit. \\y : qbit. <x,f y>\n"
 [SingleGate "I" (Lab 1) (Lab 4),SingleGate "I" (Lab 2) (Lab 5),SingleGate "I" (Lab 3) (Lab 6)]
 Root Type: TFun (TFun TQbit TQbit) (TFun TQbit (TFun TQbit (TPair TQbit TQbit)))
---- TOKEN - LABEL ASSOC LIST ---
-  Token (N, [L,R], Concl, []) ==> Lab 1
-  Token (N, [R,L], Concl, []) ==> Lab 2
-  Token (N, [R,R,L], Concl, []) ==> Lab 3
+(N, [L,R], Concl, [], Lab 1) ends in (P, [R,R,R,R], Concl, [], Lab 4)
+(N, [R,L], Concl, [], Lab 2) ends in (P, [R,R,R,L], Concl, [], Lab 5)
+(N, [R,R,L], Concl, [], Lab 3) ends in (P, [L,L], Concl, [], Lab 6)
 
