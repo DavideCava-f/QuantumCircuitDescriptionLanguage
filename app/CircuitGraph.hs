@@ -24,7 +24,7 @@ data Rule = TLAMBDA String | TGATE String [TypedTerm] | TTENSOR | TVAR | TAPP | 
 data Position = L | R deriving (Show, Eq)
 data Polarity = P | N deriving (Show, Eq)
 type Id = (TypedTerm, Polarity, [Position], PosInSeq, [PosInPi])-- deriving (Show)
-data Label = Lab Int deriving (Show,Eq)
+newtype Label = Lab Int deriving (Show,Eq)
 type Token = (Id, Label, Address) 
 type DATA = [Id]
 data Cable 
@@ -566,7 +566,7 @@ applyInitialIdentity (tokenId, currentLab, addr) currentLastLab =
 
 setupInitialTokens :: [Token] -> Int -> ([Token], [CablePair], Int)
 setupInitialTokens initialToks startLabel =
-  foldl (\(tokAcc, cableAcc, currentLab) tok@(tokenId, _, _) ->
+  foldl (\(tokAcc, cableAcc, currentLab) tok@(_, _, _) ->
             let (newTok, newCablePair, nextLab) = applyInitialIdentity tok currentLab
             in (tokAcc ++ [newTok], cableAcc ++ [newCablePair], nextLab)
         ) ([], [], startLabel) initialToks

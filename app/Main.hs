@@ -11,6 +11,10 @@ import CreateDerivation
 import CircuitGraph
 import System.Environment (getArgs, getProgName)
 
+-- JOSE:
+import Data.List (nub, sort)
+import qualified Data.Map as Map
+
 -- Parsing Dei tipi
 pTypeAtom :: Parser Type
 pTypeAtom = 
@@ -177,13 +181,17 @@ main = do
                     case annotate initialCtx ast of
                         Left typeErr -> putStrLn $ "Errore di Tipo/Linearità: " ++ typeErr
                         Right (typedAST, remainingCtx) -> do
-  --                          pPrint typedAST
                             let c = startDerivation typedAST in do
+                                let (final, assocList, finalList) = startMachine c
+                                printAsciiCircuit final
+                                prettyPrintRootType c
+                                pPrint c
+                            {-let c = startDerivation typedAST in do
 --                                printDerivation c
                                 let (final, assocList, finalList) = startMachine c
                                 print final
                                 prettyPrintRootType c
-                                prettyPrintAssocList assocList finalList
+                                prettyPrintAssocList assocList finalList-}
         [] -> putStrLn "Errore: Devi specificare il nome di un file! (es. cabal run -- file.qqdc)"
 
 
@@ -198,5 +206,78 @@ formatRootType derivation = "Root Type: " ++ show (getRootType derivation)
 
 prettyPrintRootType :: TypeDerivation -> IO ()
 prettyPrintRootType derivation = putStrLn (formatRootType derivation)
+
+-- 
+
+-- | Converts a FinalCircuit into a visual ASCII diagram with spacer rows
+printAsciiCircuit :: [TransformedGate] -> IO ()
+printAsciiCircuit gates = do
+    let -- 1. Trace dynamic labels to their root physical wires
+        buildRoots m (GateI (Lab i) (Lab o)) = Map.insert o (findRoot i m) m
+        buildRoots m (SingleGate _ (Lab i) (Lab o)) = Map.insert o (findRoot i m) m
+        buildRoots m (FullCNOT (Lab ci) (Lab co) (Lab ti) (Lab to)) = 
+            Map.insert to (findRoot ti m) (Map.insert co (findRoot ci m) m)
+        findRoot x m = Map.findWithDefault x x m
+        rootMap = foldl buildRoots Map.empty gates
+
+        -- 2. Convert raw gates to generic logical operations
+        toLogical (GateI _ _) = []
+        toLogical (SingleGate name (Lab i) _) = [(name, [findRoot i rootMap])]
+        toLogical (FullCNOT (Lab ci) _ (Lab ti) _) = [("CNOT", [findRoot ci rootMap, findRoot ti rootMap])]
+        logGates = concatMap toLogical gates
+
+        -- 3. Remap root labels to sequential qubit indices (0, 1, 2...)
+        uniqueRoots = sort $ nub $ concatMap snd logGates
+        qIndex r = maybe 0 id (lookup r (zip uniqueRoots [0..]))
+        mappedGates = map (\(n, qs) -> (n, map qIndex qs)) logGates
+        
+        numQubits = length uniqueRoots
+        
+        -- 4. ASCII Drawing Logic with Spacer Rows
+        folder lines (name, [q]) = 
+            let maxLen = maximum (map length lines)
+                -- Pad existing lines with '─' for wires (even) and ' ' for spacers (odd)
+                padded = zipWith (\i l -> l ++ replicate (maxLen - length l) (if even i then '─' else ' ')) [0..] lines
+                wireIdx = q * 2
+                
+                updateLine i str
+                    | i == wireIdx = str ++ (if name == "I" then "──" else "──[" ++ name ++ "]──")
+                    | even i       = str ++ replicate (length name + 4) '─'
+                    | otherwise    = str ++ replicate (length name + 4) ' '
+                
+            in zipWith updateLine [0..] padded
+
+        folder lines ("CNOT", [q1, q2]) = 
+            let maxLen = maximum (map length lines)
+                padded = zipWith (\i l -> l ++ replicate (maxLen - length l) (if even i then '─' else ' ')) [0..] lines
+                minIdx = min q1 q2 * 2
+                maxIdx = max q1 q2 * 2
+                
+                updateLine i str
+                    | i == q1 * 2 = str ++ "───●───"
+                    | i == q2 * 2 = str ++ "──(X)──"
+                    | i > minIdx && i < maxIdx && even i = str ++ "───|───" -- cross-wire
+                    | i > minIdx && i < maxIdx && odd i  = str ++ "   |   " -- cross-spacer
+                    | even i                             = str ++ "───────" -- empty wire
+                    | otherwise                          = str ++ "       " -- empty spacer
+                
+            in zipWith updateLine [0..] padded
+            
+        folder lines _ = lines -- Fallback
+
+        -- Generate initial prefixes and blank spacer rows
+        prefix i = "q" ++ show i ++ ": "
+        maxPref = if numQubits == 0 then 0 else maximum (map (length . prefix) [0..numQubits-1])
+        padPref s = s ++ replicate (maxPref - length s) ' '
+        
+        initialLines = concat [ [padPref (prefix i)] ++ if i < numQubits - 1 then [replicate maxPref ' '] else [] | i <- [0 .. numQubits-1] ]
+        
+        finalLines = foldl folder initialLines mappedGates
+
+    putStrLn "=============================\n"
+    if null logGates 
+       then putStrLn "(Empty Circuit)"
+       else mapM_ putStrLn finalLines
+    putStrLn "=============================\n"
 
 
