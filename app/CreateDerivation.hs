@@ -4,16 +4,33 @@ import qualified Data.Set as Set
 import qualified Data.Map as Map
 import TypeTree (Type(..),Term(..),TypedTerm(..),Value(..),TypedValue(..))
 import Data.List (intercalate)
+import TreeZipper (Context(..),Zipper(..))
 
 type Prem = Map.Map String Type
 type Concl = (Prem, TypedTerm, Type)
 
-data Tree a = Node -- Generic a
-  { rootLabel :: a
-  , subForest :: [Tree a] 
+
+data Judgment = Judgment 
+  { jPremise :: Context 
+  , jTerm    :: TypedTerm 
+  , jType    :: Type 
   } deriving (Show, Eq)
 
-type TypeDerivation = Tree Concl
+
+data TypeDerivation
+  = Axiom     Judgment String Type                 
+  | RuleApp   Judgment TypeDerivation TypeDerivation 
+  | RulePair  Judgment TypeDerivation TypeDerivation 
+  | RuleGate  Judgment String [TypeDerivation]   
+  | RuleLet   Judgment String TypeDerivation TypeDerivation
+  | RuleIf    Judgment TypeDerivation TypeDerivation TypeDerivation
+
+data Token = Token 
+  { wireLabel :: Label
+  , polarity  :: Polarity        
+  , typePath  :: [Position]      
+  , location  :: Zipper TypeDerivation 
+  }
 
 startDerivation :: TypedTerm -> TypeDerivation
 startDerivation t = 
@@ -26,7 +43,7 @@ startDerivation t =
 
 buildDerivation :: Prem -> TypedTerm -> TypeDerivation
 buildDerivation prem term = case term of
-  -- Caso TV: Derivazione valore
+  -- Case TV: Derivation values
   TV innerTerm t ->  buildDerivationV prem innerTerm t
 
   TNew n varId t ->
