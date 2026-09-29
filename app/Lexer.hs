@@ -8,7 +8,7 @@ import qualified Text.Megaparsec.Char.Lexer as L
 
 type Parser = Parsec Void String
 
--- Space Consumer (// e /* */)
+-- Space Consumer (// and /* */)
 sc :: Parser ()
 sc = L.space space1 (L.skipLineComment "//") (L.skipBlockComment "/*" "*/") 
 
@@ -17,7 +17,7 @@ rWord w = (lexeme . try) (string w <* notFollowedBy alphaNumChar)
 
 
 
--- Wrapper definisco wrapper per lessemi e simboli
+-- Wrappers: define wrappers for lexemes and symbols
 lexeme :: Parser a -> Parser a
 lexeme = L.lexeme sc
 
@@ -30,7 +30,7 @@ integer = lexeme L.decimal
 reservedWords :: [String]
 reservedWords = ["let", "in", "if", "then", "else", "bit", "qbit", "new"]
 
--- Parser per identificatori 
+-- Parser for identifiers 
 identifier :: Parser String
 identifier = (lexeme . try) (p >>= check)
   where
@@ -39,14 +39,14 @@ identifier = (lexeme . try) (p >>= check)
               then fail $ "La parola riservata '" ++ x ++ "' non può essere un nome"
               else return x
  
- -- Parentesi
+ -- Parentheses
 parens :: Parser a -> Parser a
 parens = between (symbol "(") (symbol ")")
 
 angles :: Parser a -> Parser a
 angles = between (symbol "<") (symbol ">")
 
--- Utils per il parsing
+-- Parsing utils
 arrow  :: Parser String
 arrow  = symbol "->"
 
@@ -55,6 +55,9 @@ tensor = symbol "⊗" <|> symbol "*"
 
 lambda :: Parser String
 lambda = symbol "λ" <|> symbol "\\" 
+
+turnstile :: Parser String
+turnstile = symbol "⊢" <|> symbol "|-"
 
 dot, colon, equal, comma :: Parser String
 dot    = symbol "."

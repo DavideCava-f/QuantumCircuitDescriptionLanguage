@@ -15,7 +15,7 @@ data N
 
 type Prog = [N]
 
----Parsing Atomi
+---Parsing Atoms
 intParser :: Parser N
 intParser = do
     spaces

@@ -1,886 +1,478 @@
 module CircuitGraph where
 
---import Data.Map (Map)
 import qualified Data.Map as Map
-import qualified Data.Set as Set
-import TypeTree (Type(..),Term(..),TypedTerm(..),Value(..),TypedValue(..))
-import CreateDerivation (Prem(..),Concl(..),TypeDerivation(..),Tree(..))
-import Debug.Trace (trace, traceShow, traceShowId)
+import TypeTree (Type(..), Name, TypedTerm(..), TypedValue(..))
+import CreateDerivation (Concl, TypeDerivation, Tree(..))
+import DerivationZipper
 
---Tipi e data
-type Address = Map.Map String String
-data PosInSeq = Concl | Prem String Int deriving (Show,Eq)
-type PosInPi = Int 
-emptyAddress :: Address
-emptyAddress = Map.empty
-data TransformedGate
-  = SingleGate String Label Label   -- Es. H, X, Y, Z, T con (LabelIn, LabelOut)
-  | FullCNOT Label Label Label Label -- (ControlIn, ControlOut, TargetIn, TargetOut)
-  | GateI Label Label                -- Gate Identità
-  deriving (Show, Eq)
-type TokenLabelList = [(Id, Label)]
-type FinalCircuit = [TransformedGate]
-data Rule = TLAMBDA String | TGATE String [TypedTerm] | TTENSOR | TVAR | TAPP | TDECOMP String String | TLET String deriving (Show)
+
 data Position = L | R deriving (Show, Eq)
 data Polarity = P | N deriving (Show, Eq)
-type Id = (TypedTerm, Polarity, [Position], PosInSeq, [PosInPi])-- deriving (Show)
-newtype Label = Lab Int deriving (Show,Eq)
-type Token = (Id, Label, Address) 
-type DATA = [Id]
-data Cable 
-  = LabelH Label Label Id
-  | LabelX Label Label Id
-  | LabelY Label Label Id
-  | LabelZ Label Label Id
-  | LabelT Label Label Id
-  | LabelM Label Label Id
-  | LabelI Label Label
-  | LabelCNOT Label Label Id 
-  deriving (Show)
-type CablePair = (Cable, Int)
-type Circuit = [CablePair]
-data TokenState = TokenState
-  { tokens   :: [Token]
-  , lastLabel :: Int
+newtype Label = Lab Int deriving (Show, Eq, Ord)
+
+-- Which formula of the judgement the position lies in: the conclusion A or
+-- the type of the variable `name` in the context Gamma.
+data Formula = InConcl | InPrem Name deriving (Eq)
+
+instance Show Formula where
+  show InConcl    = "Concl"
+  show (InPrem x) = "Prem " ++ show x
+
+-- An occurrence of a base type inside a formula: the context (C, B) + polarity.
+data Occ = Occ
+  { occFormula :: Formula
+  , occPath    :: [Position]
+  , occPol     :: Polarity
+  } deriving (Eq, Show)
+
+-- sigma: a position in pi = a judgement (zipper) + an occurrence in it.
+data Pos = Pos
+  { posNode :: Zipper
+  , posOcc  :: Occ
+  } deriving (Eq, Show)
+
+-- G: partial function from labels to {0,1}.
+type Address = Map.Map Label Bool
+
+emptyAddress :: Address
+emptyAddress = Map.empty
+
+-- a = (sigma, G) + the wire the token is travelling on.
+data Token = Token
+  { tokPos   :: Pos
+  , tokLabel :: Label
+  , tokAddr  :: Address
   } deriving (Show)
 
-emptyTokenState :: TokenState
-emptyTokenState = TokenState [] 0
-------- Final Circuit Builder
+type TokenLabelList = [(Pos, Label)]
 
-isOppositeBranch :: Id -> Id -> Bool
-isOppositeBranch (term1, pol1, posRL1, concl1, list1) (term2, pol2, posRL2, concl2, list2) =
-  
-  pol1 == pol2 && concl1 == concl2 && list1 == list2 &&
+-- Circuit: sequence of gates c^l_r. A CNOT is emitted in halves (one wire per
+-- token) and the two halves are joined in buildFinalCircuit: they are the same
+-- gate if they have the same gate axiom (pathOf) and opposite L/R sides.
+type GateRef = [Int]
 
-  isOppositeRL posRL1 posRL2
+data Cable
+  = Wire String Label Label                 -- I, H, X, Y, Z, T, M  (labelIn, labelOut)
+  | HalfCNOT Position GateRef Label Label   -- side (L = control, R = target), axiom, in, out
+  deriving (Show, Eq)
 
--- Helper Controllo se la posizione e' opposta sull'ultimo LR
-isOppositeRL :: [Position] -> [Position] -> Bool
-isOppositeRL [] [] = False
-isOppositeRL [L] [R] = True
-isOppositeRL [R] [L] = True
-isOppositeRL (x:xs) (y:ys) 
-  | x == y    = isOppositeRL xs ys
-  | otherwise = False
-isOppositeRL _ _ = False
+type Circuit = [Cable]
 
--- Trovo il CNOT corrispondente nel Circuit e Creoil FULLCNOT
-findAndRemoveCNOT :: Id -> [CablePair] -> Maybe (Label, Label, [CablePair])
-findAndRemoveCNOT _ [] = Nothing
-findAndRemoveCNOT targetId ((c, labInt):xs) = case c of
-  LabelCNOT lIn2 lOut2 cnotId2 
-    | isOppositeBranch targetId cnotId2 -> 
-        Just (lIn2, lOut2, xs)
-        
-  _ -> case findAndRemoveCNOT targetId xs of
-        Just (lIn2, lOut2, updatedXs) -> Just (lIn2, lOut2, (c, labInt) : updatedXs)
-        Nothing                        -> Nothing
+-- E ::= C | C -l-> (E, F)
+data ExtCircuit
+  = Leaf Circuit
+  | Branch Circuit Label ExtCircuit ExtCircuit
+  deriving (Show)
 
-buildFinalCircuit :: [CablePair] -> FinalCircuit
+-- E@G
+at :: Address -> ExtCircuit -> Maybe Circuit
+at _ (Leaf c) = Just c
+at g (Branch _ l e f) = case Map.lookup l g of
+  Just True  -> at (Map.delete l g) e
+  Just False -> at (Map.delete l g) f
+  Nothing    -> Nothing
+
+-- E@G[C]: applies a modification to the circuit at address G
+modifyAt :: Address -> (Circuit -> Circuit) -> ExtCircuit -> ExtCircuit
+modifyAt _ h (Leaf c) = Leaf (h c)
+modifyAt g h (Branch c l e f) = case Map.lookup l g of
+  Just True  -> Branch c l (modifyAt (Map.delete l g) h e) f
+  Just False -> Branch c l e (modifyAt (Map.delete l g) h f)
+  Nothing    -> Branch c l e f
+
+data TransformedGate
+  = SingleGate String Label Label     -- E.g. H, X, Y, Z, T, M, I with (LabelIn, LabelOut)
+  | FullCNOT Label Label Label Label  -- (In1, Out1, In2, Out2) in emission order
+  deriving (Show, Eq)
+
+type FinalCircuit = [TransformedGate]
+
+-- Configuration C = (pi, M, E)
+data Config = Config
+  { cfgTokens    :: [Token]      -- M
+  , cfgCircuit   :: ExtCircuit   -- E
+  , cfgNextLabel :: Int          -- last label used (generator of lab(-))
+  } deriving (Show)
+
+emptyConfig :: Config
+emptyConfig = Config [] (Leaf []) 0
+
+-- Typing rule the token is crossing
+data Rule
+  = TLAMBDA Name
+  | TGATE String [TypedTerm]
+  | TTENSOR
+  | TVAR Name
+  | TAPP
+  | TDECOMP Name Name
+  | TLET Name
+  | TIF
+  deriving (Show)
+
+------------------------------------------------------------------------------
+-- Positions: construction and polarity
+------------------------------------------------------------------------------
+
+flipPol :: Polarity -> Polarity
+flipPol P = N
+flipPol N = P
+
+isBase :: Type -> Bool
+isBase TQbit = True
+isBase TBit  = True
+isBase _     = False
+
+-- Polarity of the occurrence `path` in the formula `f` of the judgement: start from
+-- P for the conclusion and from N for the premises, flip on the left of an
+-- arrow, do not flip under the tensor. Nothing if the path does not
+-- correspond to a base type of the formula.
+polarityAt :: Concl -> Formula -> [Position] -> Maybe Polarity
+polarityAt (prem, _, ty) f path = case f of
+    InConcl  -> walk P ty path
+    InPrem x -> Map.lookup x prem >>= \t -> walk N t path
+  where
+    walk pol t            []       = if isBase t then Just pol else Nothing
+    walk pol (TFun a _)   (L : ps) = walk (flipPol pol) a ps
+    walk pol (TFun _ b)   (R : ps) = walk pol b ps
+    walk pol (TPair a _)  (L : ps) = walk pol a ps
+    walk pol (TPair _ b)  (R : ps) = walk pol b ps
+    walk _   _            _        = Nothing
+
+-- Builds the target position of a rule (instead of searching for it in a list).
+mkPos :: Zipper -> Formula -> [Position] -> Maybe Pos
+mkPos z f p = Pos z . Occ f p <$> polarityAt (judgement z) f p
+
+-- All the positions of a judgement (premises first, in name order,
+-- then the conclusion; this is the order of the old processJudgment).
+positionsOf :: Zipper -> [Occ]
+positionsOf z =
+  let (prem, _, ty) = judgement z
+      inType f start t = [ Occ f p pol | (p, pol) <- walk start [] t ]
+      walk pol acc t | isBase t = [(reverse acc, pol)]
+      walk pol acc (TFun a b)   = walk (flipPol pol) (L : acc) a ++ walk pol (R : acc) b
+      walk pol acc (TPair a b)  = walk pol (L : acc) a ++ walk pol (R : acc) b
+      walk _   _   _            = []
+  in concat [ inType (InPrem x) N t | (x, t) <- Map.toList prem ] ++ inType InConcl P ty
+
+-- The token has reached a positive position of the conclusion of pi (PDATA)
+stopCond :: Pos -> Bool
+stopCond (Pos z occ) = isRoot z && occPol occ == P
+
+-- True if the judgement is the axiom of a gate  |- c : T(c)
+isGateAxiom :: Zipper -> Bool
+isGateAxiom z = case termOf z of
+  TGate _ [] _ -> True
+  _            -> False
+
+------------------------------------------------------------------------------
+-- Rule inference
+--
+-- A negative token goes up towards the premises: the rule is that of the judgement
+-- it lies in. A positive token goes down through the rule below: the
+-- rule is that of the parent judgement.
+------------------------------------------------------------------------------
+
+ruleAt :: Pos -> Either String Rule
+ruleAt (Pos z occ) = do
+  node <- maybe (Left ("nessuna regola sotto la radice per " ++ showPos (Pos z occ))) Right
+                (if occPol occ == P then up z else Just z)
+  case termOf node of
+    TV (TVar x _) _        -> Right (TVAR x)
+    TV (TLambda x _ _ _) _ -> Right (TLAMBDA x)
+    TV (TTensor _ _ _) _   -> Right TTENSOR
+    TDecomp a b _ _ _      -> Right (TDECOMP a b)
+    TApp _ _ _             -> Right TAPP
+    TLet x _ _ _ _         -> Right (TLET x)
+    TGate g args _         -> Right (TGATE g args)
+    TIf _ _ _ _            -> Right TIF
+    TNew _ _ _             -> Left ("Termine non riconosciuto (new) in " ++ showPos (Pos z occ))
+
+------------------------------------------------------------------------------
+-- Structural rules (Fig. 6a of the paper)
+--
+-- Each clause is a navigation in the zipper (up / down i / sibling j)
+-- followed by mkPos, which builds the target occurrence and recomputes its
+-- polarity. `z` is always the judgement the token lies in.
+------------------------------------------------------------------------------
+
+-- Premise that owns the variable y among the children k
+ownerOf :: Name -> [Int] -> Zipper -> Maybe Zipper
+ownerOf _ [] _ = Nothing
+ownerOf y (k : ks) z = case down k z of
+  Just zk | Map.member y (premOf zk) -> Just zk
+  _                                  -> ownerOf y ks z
+
+-- Gate node: children [gate axiom (0), argument (1)]
+applyGate :: Pos -> Maybe Pos
+applyGate (Pos z (Occ f path pol)) = case (f, pol) of
+  (InPrem y, N) -> down 1 z >>= \z' -> mkPos z' (InPrem y) path
+  (InPrem y, P) -> up z     >>= \z' -> mkPos z' (InPrem y) path
+  (InConcl, P) -> case childIndex z of
+      -- Leaving the axiom's output (R : p): go to the conclusion of the gate node
+      Just 0 -> up z >>= \z' -> mkPos z' InConcl (drop 1 path)
+      -- Leaving the argument's conclusion: enter the axiom's input (L : p)
+      _      -> sibling 0 z >>= \z' -> mkPos z' InConcl (L : path)
+  (InConcl, N)
+      -- Circuit rule: from the input to the output of the axiom
+      | isGateAxiom z -> mkPos z InConcl (R : drop 1 path)
+      -- Negative position in the gate's output: go down into the axiom
+      | otherwise     -> down 0 z >>= \z' -> mkPos z' InConcl (R : path)
+
+-- Application node: children [function (0), argument (1)]
+applyApp :: Pos -> Maybe Pos
+applyApp (Pos z (Occ f path pol)) = case (f, pol) of
+  (InPrem y, N) -> ownerOf y [0, 1] z >>= \z' -> mkPos z' (InPrem y) path
+  (InPrem y, P) -> up z >>= \z' -> mkPos z' (InPrem y) path
+  -- B- of the conclusion  ->  B- inside A -o B of the function
+  (InConcl, N)  -> down 0 z >>= \z' -> mkPos z' InConcl (R : path)
+  (InConcl, P)  -> case (childIndex z, path) of
+      -- leaving the function on the output B+  ->  B+ of the conclusion
+      (Just 0, R : ps) -> up z >>= \z' -> mkPos z' InConcl ps
+      -- leaving the function on the input A-  ->  A of the argument's conclusion
+      (Just 0, L : ps) -> sibling 1 z >>= \z' -> mkPos z' InConcl ps
+      (Just 0, [])     -> Nothing
+      -- leaving the argument A+  ->  A- inside A -o B of the function
+      _                -> sibling 0 z >>= \z' -> mkPos z' InConcl (L : path)
+
+-- Axiom x : A |- x : A: the token crosses the axiom
+applyVar :: Name -> Pos -> Maybe Pos
+applyVar x (Pos z (Occ f path pol)) = case (f, pol) of
+  (InConcl, N)  -> mkPos z (InPrem x) path
+  (InPrem _, N) -> mkPos z InConcl path
+  _             -> Nothing
+
+-- Pair node: children [t1 (0), t2 (1)]
+applyTensor :: Pos -> Maybe Pos
+applyTensor (Pos z (Occ f path pol)) = case (f, pol) of
+  (InPrem y, N) -> ownerOf y [0, 1] z >>= \z' -> mkPos z' (InPrem y) path
+  (InPrem y, P) -> up z >>= \z' -> mkPos z' (InPrem y) path
+  (InConcl, N)  -> case path of
+      L : ps -> down 0 z >>= \z' -> mkPos z' InConcl ps
+      R : ps -> down 1 z >>= \z' -> mkPos z' InConcl ps
+      []     -> Nothing
+  (InConcl, P)  -> do
+      k  <- childIndex z
+      z' <- up z
+      mkPos z' InConcl ((if k == 0 then L else R) : path)
+
+-- Node let <x,y> = M in N: children [pair (0), body (1)]
+applyDecomp :: Name -> Name -> Pos -> Maybe Pos
+applyDecomp x y (Pos z (Occ f path pol)) = case (f, pol) of
+  (InPrem v, N) -> ownerOf v [0, 1] z >>= \z' -> mkPos z' (InPrem v) path
+  (InPrem v, P)
+      | v == x    -> sibling 0 z >>= \z' -> mkPos z' InConcl (L : path)
+      | v == y    -> sibling 0 z >>= \z' -> mkPos z' InConcl (R : path)
+      | otherwise -> up z >>= \z' -> mkPos z' (InPrem v) path
+  (InConcl, N)  -> down 1 z >>= \z' -> mkPos z' InConcl path
+  (InConcl, P)  -> case (childIndex z, path) of
+      -- leaving the pair: left component -> x, right -> y in the body
+      (Just 0, L : ps) -> sibling 1 z >>= \z' -> mkPos z' (InPrem x) ps
+      (Just 0, R : ps) -> sibling 1 z >>= \z' -> mkPos z' (InPrem y) ps
+      (Just 0, [])     -> Nothing
+      -- leaving the body -> conclusion of the let
+      _                -> up z >>= \z' -> mkPos z' InConcl path
+
+-- Node lambda x: children [body (0)]
+applyLambda :: Name -> Pos -> Maybe Pos
+applyLambda x (Pos z (Occ f path pol)) = case (f, pol) of
+  (InPrem y, N) | y /= x -> down 0 z >>= \z' -> mkPos z' (InPrem y) path
+  (InPrem y, P) | y /= x -> up z >>= \z' -> mkPos z' (InPrem y) path
+  -- entering from the conclusion A -o B: A goes to the premise x, B to the body's conclusion
+  (InConcl, N) -> case path of
+      L : ps -> down 0 z >>= \z' -> mkPos z' (InPrem x) ps
+      R : ps -> down 0 z >>= \z' -> mkPos z' InConcl ps
+      []     -> Nothing
+  -- leaving the body: the conclusion B goes right, the premise x goes left
+  (InConcl, P)  -> up z >>= \z' -> mkPos z' InConcl (R : path)
+  (InPrem _, P) -> up z >>= \z' -> mkPos z' InConcl (L : path)
+  (InPrem _, N) -> Nothing
+
+-- Node let x = M in N: children [value (0), body (1)]
+applyLet :: Name -> Pos -> Maybe Pos
+applyLet x (Pos z (Occ f path pol)) = case (f, pol) of
+  (InPrem y, N) | y /= x -> ownerOf y [0, 1] z >>= \z' -> mkPos z' (InPrem y) path
+  (InPrem y, P) | y /= x -> up z >>= \z' -> mkPos z' (InPrem y) path
+  -- x : A+ in the body  ->  A+ of the value's conclusion
+  (InPrem _, P) -> sibling 0 z >>= \z' -> mkPos z' InConcl path
+  (InPrem _, N) -> Nothing
+  (InConcl, P)  -> case childIndex z of
+      -- A+ of the value  ->  x : A in the body
+      Just 0 -> sibling 1 z >>= \z' -> mkPos z' (InPrem x) path
+      -- B+ of the body  ->  B+ of the let
+      _      -> up z >>= \z' -> mkPos z' InConcl path
+  -- B- of the let  ->  B- of the body
+  (InConcl, N)  -> down 1 z >>= \z' -> mkPos z' InConcl path
+
+applyRule :: Rule -> Pos -> Either String Pos
+applyRule rule pos =
+  let target = case rule of
+        TLAMBDA x   -> applyLambda x pos
+        TVAR x      -> applyVar x pos
+        TAPP        -> applyApp pos
+        TTENSOR     -> applyTensor pos
+        TDECOMP x y -> applyDecomp x y pos
+        TLET x      -> applyLet x pos
+        TGATE _ _   -> applyGate pos
+        TIF         -> Nothing
+  in case (rule, target) of
+       (TIF, _)       -> Left ("if-then-else non ancora supportato dalla macchina in " ++ showPos pos)
+       (_, Just p)    -> Right p
+       (_, Nothing)   -> Left ("Regola " ++ show rule ++ " non applicabile alla posizione " ++ showPos pos)
+
+------------------------------------------------------------------------------
+-- Circuit rule (Fig. 6b) and token travel
+------------------------------------------------------------------------------
+
+makeCable :: String -> Zipper -> [Position] -> Label -> Label -> Cable
+makeCable "CNOT" axiom path lIn lOut = case path of
+  (_ : side : _) -> HalfCNOT side (pathOf axiom) lIn lOut
+  _              -> error ("Posizione di ingresso CNOT inattesa: " ++ show path)
+makeCable g _ _ lIn lOut = Wire g lIn lOut
+
+-- One machine step for a token
+stepToken :: Token -> Config -> Either String (Token, Config)
+stepToken tok cfg = do
+  let pos@(Pos z occ) = tokPos tok
+  rule <- ruleAt pos
+  case rule of
+    -- The token is on the input of a gate axiom: emits the gate
+    TGATE g [] | occPol occ == N -> do
+      pos' <- applyRule rule pos
+      let n     = cfgNextLabel cfg + 1
+          lOut  = Lab n
+          cable = makeCable g z (occPath occ) (tokLabel tok) lOut
+      return ( tok { tokPos = pos', tokLabel = lOut }
+             , cfg { cfgCircuit = modifyAt (tokAddr tok) (++ [cable]) (cfgCircuit cfg)
+                   , cfgNextLabel = n } )
+    _ -> do
+      pos' <- applyRule rule pos
+      return (tok { tokPos = pos' }, cfg)
+
+-- Makes a token travel up to a final position
+runToken :: Token -> Config -> Either String (Token, Config)
+runToken tok cfg
+  | stopCond (tokPos tok) = Right (tok, cfg)
+  | otherwise             = stepToken tok cfg >>= uncurry runToken
+
+------------------------------------------------------------------------------
+-- Initial configuration
+------------------------------------------------------------------------------
+
+-- Pre-order visit of all the judgements of pi
+allNodes :: Zipper -> [Zipper]
+allNodes z = z : concatMap allNodes [ zk | k <- [0 .. length (subForest (focus z)) - 1]
+                                         , Just zk <- [down k z] ]
+
+-- Initial positions: NDATA (negative positions of the conclusion of pi) and the
+-- outputs of the `new` axioms, which play the role of the occurrences of * (ONES).
+findInitials :: Zipper -> [Pos]
+findInitials root =
+  let ndata     = [ Pos root o | o <- positionsOf root, occPol o == N ]
+      isNew z   = case termOf z of TNew _ _ _ -> True; _ -> False
+      newTokens = [ Pos z o | z <- allNodes root, isNew z, o <- positionsOf z, occPol o == P ]
+  in ndata ++ newTokens
+
+-- Creates the initial tokens, one label each
+addTokens :: [Pos] -> Config -> (Config, TokenLabelList)
+addTokens poss cfg =
+  let start  = cfgNextLabel cfg
+      toks   = zipWith (\p i -> Token p (Lab i) emptyAddress) poss [start + 1 ..]
+      assoc  = [ (tokPos t, tokLabel t) | t <- toks ]
+  in (cfg { cfgTokens = cfgTokens cfg ++ toks, cfgNextLabel = start + length poss }, assoc)
+
+-- Identity on every initial wire (the Id circuit of the initial configuration)
+applyInitialIdentity :: Token -> Config -> (Token, Config)
+applyInitialIdentity tok cfg =
+  let n    = cfgNextLabel cfg + 1
+      lOut = Lab n
+      tok' = tok { tokLabel = lOut }
+      cfg' = cfg { cfgCircuit = modifyAt (tokAddr tok) (++ [Wire "I" (tokLabel tok) lOut]) (cfgCircuit cfg)
+                 , cfgNextLabel = n }
+  in (tok', cfg')
+
+setupInitialTokens :: Config -> Config
+setupInitialTokens cfg =
+  let (toks, cfg') = foldl (\(acc, c) t -> let (t', c') = applyInitialIdentity t c in (acc ++ [t'], c'))
+                           ([], cfg) (cfgTokens cfg)
+  in cfg' { cfgTokens = toks }
+
+------------------------------------------------------------------------------
+-- Machine
+------------------------------------------------------------------------------
+
+runMachine :: Config -> Either String (FinalCircuit, TokenLabelList)
+runMachine cfg0 = do
+  let cfg1 = setupInitialTokens cfg0
+      go (finished, c) t = do
+        (t', c') <- runToken t c
+        return (finished ++ [t'], c')
+  (finalToks, cfgEnd) <- foldl (\acc t -> acc >>= \s -> go s t) (Right ([], cfg1 { cfgTokens = [] })) (cfgTokens cfg1)
+  circuit <- maybe (Left "Indirizzo vuoto non valido nel circuito esteso") Right (at emptyAddress (cfgCircuit cfgEnd))
+  return (buildFinalCircuit circuit, [ (tokPos t, tokLabel t) | t <- finalToks ])
+
+startMachine :: TypeDerivation -> Either String (FinalCircuit, TokenLabelList, TokenLabelList)
+startMachine derivation = do
+  let root             = fromTree derivation
+      (cfg, assocList) = addTokens (findInitials root) emptyConfig
+  (final, finalList) <- runMachine cfg
+  return (final, assocList, finalList)
+
+------------------------------------------------------------------------------
+-- Final circuit: joining the two halves of each CNOT
+------------------------------------------------------------------------------
+
+findAndRemoveCNOT :: Position -> GateRef -> Circuit -> Maybe (Label, Label, Circuit)
+findAndRemoveCNOT _ _ [] = Nothing
+findAndRemoveCNOT side ref (c : cs) = case c of
+  HalfCNOT side2 ref2 lIn lOut | ref2 == ref && side2 /= side -> Just (lIn, lOut, cs)
+  _ -> do
+    (lIn, lOut, rest) <- findAndRemoveCNOT side ref cs
+    return (lIn, lOut, c : rest)
+
+buildFinalCircuit :: Circuit -> FinalCircuit
 buildFinalCircuit [] = []
-buildFinalCircuit ((cable, _):rest) = case cable of
-
-  -- Gate Identità e monoargomento
-  LabelI lIn lOut   -> SingleGate "I" lIn lOut : buildFinalCircuit rest
-  LabelM lIn lOut _ -> SingleGate "M" lIn lOut : buildFinalCircuit rest
-  LabelH lIn lOut _ -> SingleGate "H" lIn lOut : buildFinalCircuit rest
-  LabelX lIn lOut _ -> SingleGate "X" lIn lOut : buildFinalCircuit rest
-  LabelY lIn lOut _ -> SingleGate "Y" lIn lOut : buildFinalCircuit rest
-  LabelZ lIn lOut _ -> SingleGate "Z" lIn lOut : buildFinalCircuit rest
-  LabelT lIn lOut _ -> SingleGate "T" lIn lOut : buildFinalCircuit rest
-
-  LabelCNOT lIn1 lOut1 cnotId1 ->
-    case findAndRemoveCNOT cnotId1 rest of
-      Just (lIn2, lOut2, remainingCircuit) ->
-        FullCNOT lIn1 lOut1 lIn2 lOut2 : buildFinalCircuit remainingCircuit
-      Nothing -> 
-        error $ "Errore: CNOT DEVE avere la sua parte L o R" ++ show cnotId1
-
-------- SemiCircuit Creation utils
-
-makeCable :: String -> Label -> Label -> Id -> Cable
-makeCable g lIn lOut identifier = case g of
-  "H"    -> LabelH lIn lOut identifier
-  "X"    -> LabelX lIn lOut identifier
-  "Y"    -> LabelY lIn lOut identifier
-  "Z"    -> LabelZ lIn lOut identifier
-  "T"    -> LabelT lIn lOut identifier
-  "M"    -> LabelM lIn lOut identifier
-  "CNOT" -> LabelCNOT lIn lOut identifier
-  _      -> error $ "Gate non supportato per Cable: " ++ g
-
--------- Rule Infer
-inferRule :: Token -> DATA -> Rule
-inferRule token@((term, pol, pos, seq, pi), lab, addr) allData =
-  let 
-
-    termToInspect = if pol == P
-                      then let fatherId = head (filterByPathPi (dropLast pi) allData)
-                           in getTerm fatherId
-                      else term
-  in 
-
-    case termToInspect of
-      TV v _ -> case v of
-        TVar _ _          -> TVAR
-        TLambda x _ _ _   -> TLAMBDA x
-        TTensor _ _ _   -> TTENSOR 
-      TDecomp z x _ _ _ -> TDECOMP z x
-      TApp _ _ _ -> TAPP
-      TLet x _ _ _ _ -> TLET x
-      TGate g args _ -> TGATE g args
-      _                    -> error "Termine non riconosciuto"
------ Application of Rules, following Paper
-applyGate :: String -> Token -> DATA -> Token
-applyGate g token@((term, pol, pos, seq, pi), lab, addr) allData =
-
-  case seq of
-
-    Prem z idx ->
-      case pol of
-
-        N ->
-          let targetData = filterByPathPi (pi ++ [1]) allData
-              premiseData = getPremiseN z targetData
-              matchedId   = traceShowId (filterByPosLR pos premiseData)
-          in (head matchedId, lab, addr)
-
-        P ->
-          let parentPi    = dropLast pi
-              parentData  = filterByPathPi parentPi allData
-              premiseData = getPremiseN z parentData
-              matchedId   = traceShowId (filterByPosLR pos premiseData)
-          in (head matchedId, lab, addr)
-
-    Concl ->
-        case pol of
-            P ->
-                let whichSon = last pi
-                    parentId = dropLast pi
-                in
-                    if whichSon == 1
-                        then 
-                            let matchedId = traceShowId (filterByPathPi (parentId ++ [0]) . filterConcl . filterByPosLR (L : pos) $ allData)
-                            in
-                                (head matchedId, lab, addr)
-                        else
-                             let matchedId = traceShowId (filterByPathPi (parentId) . filterConcl . filterByPosLR (tail pos) $ allData)
-                             in 
-                                (head matchedId, lab, addr)
-            N -> 
-                 let matchedId = traceShowId (filterByPathPi (pi) . filterConcl . filterByPosLR (R : (tail pos)) $ allData)
-                 in
-                    (head matchedId, lab, addr)
-
-applyApp :: Token -> DATA -> Token
-applyApp token@((term, pol, pos, seq, pi), lab, addr) allData =
-
-  case seq of
-
-    Prem z idx ->
-      case pol of
-
-        N ->
-          let dataChild0 = filterByPathPi (pi ++ [0]) allData
-              dataChild1 = filterByPathPi (pi ++ [1]) allData
-              
-              targetData = if hasPremise z dataChild0 
-                             then dataChild0 
-                             else dataChild1
-                             
-              premiseData = getPremiseN z targetData
-              matchedId   = traceShowId (filterByPosLR pos premiseData)
-          in (head matchedId, lab, addr)
-
-        P ->
-          let parentPi    = dropLast pi
-              parentData  = filterByPathPi parentPi allData
-              premiseData = getPremiseN z parentData
-              matchedId   = traceShowId (filterByPosLR pos premiseData)
-          in (head matchedId, lab, addr)
-
-    Concl ->
-        case pol of
-            N ->
-                let matchedId = traceShowId (filterByPathPi (pi ++ [0]) . filterConcl . filterByPosLR (R : pos) $ allData) 
-                in 
-                    (head matchedId, lab, addr)
-            P ->
-                let whichSon = last pi
-                    parentId = dropLast pi
-                in
-                    if whichSon == 0
-                        then 
-                            case pos of
-                                (p:ps) -> case p of
-                                    R -> let matchedId = traceShowId (filterByPathPi (parentId) . filterConcl . filterByPosLR (ps) $ allData)
-                                         in
-                                            (head matchedId, lab, addr)
-                                    L -> let matchedId = traceShowId (filterByPathPi (parentId ++ [1]) . filterConcl . filterByPosLR (ps) $ allData)
-                                         in
-                                            (head matchedId, lab, addr)
-                                _ -> error "Errore Applicazione, non puo essere vuoto il pos del primo figlio"
-                        else
-
-                             let matchedId = traceShowId (filterByPathPi (parentId ++ [0]) . filterConcl . filterByPosLR (L : pos) $ allData)
-                             in 
-                                (head matchedId, lab, addr)
-
-applyVar :: Token -> DATA -> Token
-applyVar token@((term, pol, pos, seq, pi), lab, addr) allData =
-  case pol of
-    N -> 
-        case seq of
-
-            Concl ->
-                let matchedId = traceShowId (filterByPathPi pi . filterPremises . filterByPosLR pos $ allData)
-                in 
-                    (head matchedId, lab, addr)
-            Prem _ 0 ->
-                let matchedId = traceShowId (filterByPathPi pi . filterConcl . filterByPosLR pos $ allData)
-                in 
-                    (head matchedId, lab, addr)
-
-applyTensor :: Token -> DATA -> Token
-applyTensor token@((term, pol, pos, seq, pi), lab, addr) allData =
-  case pol of
-    N -> case seq of
-
-       Prem y _ ->
-         let -- Recuperiamo i sottoalberi per il figlio 0 e il figlio 1
-            dataChild0 = filterByPathPi (pi ++ [0]) allData
-            dataChild1 = filterByPathPi (pi ++ [1]) allData
-            
-            -- Scegliamo i dati del figlio che possiede la premessa con nome 'y'
-            targetData = if hasPremise y dataChild0
-                            then dataChild0
-                            else dataChild1
-                           
-            premiseData = getPremiseN y targetData
-            matchedId   = traceShowId (filterByPosLR pos premiseData)
-         in (head matchedId, lab, addr)
-
-       Concl -> error "I qubit negativi di Tensor si presuppongono essere nella premessa"
-
-    
-    P -> case seq of
-        -- Connetti a elemento negativo che ha come nome quello in seq, trovare quindi il figlio corrispondente (Si presuppone che siano tutti nella premessa i qbit negativi di tensor)
-       Prem y _ ->
-         let -- Recuperiamo i datidel padre
-            dataFather = filterByPathPi (dropLast pi) allData
-                           
-            premiseData = getPremiseN y dataFather
-            matchedId   = traceShowId (filterByPosLR pos premiseData)
-         in (head matchedId, lab, addr)
-
-       Concl -> 
-         let 
-             parentPi  = dropLast pi
-             lastIndex = last pi  -- Può essere 0 oppure 1
-            
-            
-             lrPrefix  = if lastIndex == 0 then L else R
-            
-           
-             parentData = filterByPathPi parentPi allData
-             conclData  = filterConcl parentData
-            
-          
-             matchedId  = traceShowId (filterByPosLR (lrPrefix : pos) conclData)
-        in (head matchedId, lab, addr) -- Ho messo prefisso ma deve essere sempre vuoto [] a questo punto
-
-getVarAtPosition :: String -> String -> Position -> TypedTerm -> Maybe String
-getVarAtPosition x y targetPos (TV (TTensor leftTerm rightTerm _) _)  =
-    let selectedTerm = case targetPos of
-                         L -> leftTerm
-                         R -> rightTerm
-    in if containsVar x selectedTerm
-         then Just x
-         else if containsVar y selectedTerm
-                then Just y
-                else Nothing
-getVarAtPosition x y targetPos (TApp fun arg _) =
-  case getVarAtPosition x y targetPos arg of
-    Just res -> Just res
-    Nothing  -> getVarAtPosition x y targetPos fun
-
-getVarAtPosition x y targetPos (TGate _ (t:ts) ty) =
-  case getVarAtPosition x y targetPos t of
-    Just res -> Just res
-    Nothing  -> getVarAtPosition x y targetPos (TGate "" ts ty)
-
-getVarAtPosition _ _ _ (TGate _ [] _) = Nothing
-
-getVarAtPosition x y targetPos (TLet _ _ val body _) =
-  case getVarAtPosition x y targetPos body of
-    Just res -> Just res
-    Nothing  -> getVarAtPosition x y targetPos val
-
-getVarAtPosition x y targetPos (TDecomp _ _ t1 bodyTerm _) =
-  case getVarAtPosition x y targetPos bodyTerm of
-    Just res -> Just res
-    Nothing  -> getVarAtPosition x y targetPos t1
-
-getVarAtPosition x y targetPos (TV (TVar _ _) _)= Nothing
-getVarAtPosition _ _ _ _ = error "Non trova il tensor"
-
--- Helper per verificare se un TypedTerm contiene la variabile cercata
-containsVar :: String -> TypedTerm -> Bool
-containsVar targetVar term = case term of
-  TV (TVar name _) _         -> name == targetVar
-  TGate _ args _      -> any (containsVar targetVar) args
-  TV (TTensor t1 t2 _) _     -> containsVar targetVar t1 || containsVar targetVar t2
-  TDecomp _ _ t1 t2 _ -> containsVar targetVar t1 || containsVar targetVar t2
-  TApp fun arg _ -> containsVar targetVar fun || containsVar targetVar arg
-  TLet _ _ val body _ -> containsVar targetVar val || containsVar targetVar body
-  _                   -> False
-
-
-applyDecomp :: String -> String -> Token -> DATA -> Token
-applyDecomp x y token@((term, pol, pos, seq, pi), lab, addr) allData =
-  case seq of
-
-    Prem z idx ->
-      case pol of
-        N ->
-          let dataChild0 = filterByPathPi (pi ++ [0]) allData
-              dataChild1 = filterByPathPi (pi ++ [1]) allData
-              
-              targetData = if hasPremise z dataChild0 
-                             then dataChild0 
-                             else dataChild1
-                             
-              premiseData = getPremiseN z targetData
-              matchedId   = traceShowId (filterByPosLR pos premiseData)
-          in (head matchedId, lab, addr)
-
-        P ->
-          let parentPi    = dropLast pi
-              parentData  = filterByPathPi parentPi allData
-              premiseData = getPremiseN z parentData
-              matchedId   = traceShowId (filterByPosLR pos premiseData)
-          in (head matchedId, lab, addr)
-
-    Concl ->
-      case pol of
-        N ->
-          let child1Data = filterByPathPi (pi ++ [1]) allData
-              conclData  = filterConcl child1Data
-              matchedId  = traceShowId (filterByPosLR pos conclData)
-          in (head matchedId, lab, addr)
-
-        P ->
-          let lastIndex = last pi
-              parentPi  = dropLast pi
-          in if lastIndex == 1
-               -- Se siamo nel Figlio 1: Vai nella conclusione del padre
-               then let parentData = filterByPathPi parentPi allData
-                        conclData  = filterConcl parentData
-                        matchedId  = traceShowId (filterByPosLR pos conclData)
-                    in (head matchedId, lab, addr)
-
-               -- Se siamo nel Figlio 0: Vai al corrispondente nel Figlio 1
-               else let sibling1Pi = parentPi ++ [1]
-                        siblingData = filterByPathPi sibling1Pi allData
-                    in case pos of
-
-                         (L : ps) ->
-                           let premiseData = getPremiseN x siblingData
-                               matchedId   = traceShowId (filterByPosLR ps premiseData)
-                           in (head matchedId, lab, addr)
-
-                         -- Se la posizione inizia con R -> premessa della variabile y
-                         (R : ps) ->
-                           let premiseData = getPremiseN y siblingData
-                               matchedId   = traceShowId (filterByPosLR ps premiseData)
-                           in (head matchedId, lab, addr)
-
-                         [] -> error "Posizione LR vuota per il figlio 0 in Concl (P)"
-
-applyLambda :: String -> Token -> DATA -> Token
-applyLambda x token@((term, pol, pos, seq, pi), lab, addr) allData =
-  case seq of
-
-    -- 1. CASO IN GAMMA: Premessa con nome 'y' diverso da 'x'
-    Prem y idx | y /= x -> 
-      case pol of
-        N -> 
-          let usefulData  = filterByPathPi (pi ++ [0]) allData
-              premiseData = getPremiseN y usefulData
-              matchedId   = traceShowId (filterByPosLR pos premiseData)
-          in (head matchedId, lab, addr)
-
-        P -> 
-          let usefulData  = filterByPathPi (dropLast pi) allData
-              premiseData = getPremiseN y usefulData
-              matchedId   = traceShowId (filterByPosLR pos premiseData)
-          in (head matchedId, lab, addr)
-
-    -- 2. CASO NON IN GAMMA: Ramo di fallback (quando seq è Prem x idx oppure Concl)
-    _ -> 
-      case pol of
-        N -> 
-          case pos of
-            (p : ps) -> 
-              let usefulData = filterByPathPi (pi ++ [0]) allData
-              in case p of
-                L -> 
-                  let premiseData = getPremiseN x usefulData
-                      matchedId   = traceShowId (filterByPosLR ps premiseData)
-                  in (head matchedId, lab, addr)
-
-                R -> 
-                  let conclData = filterConcl usefulData
-                      matchedId = traceShowId (filterByPosLR ps conclData)
-                  in (head matchedId, lab, addr)
-
-            [] -> error "Posizione LR vuota"
-
-        P -> 
-          let usefulData = filterByPathPi (dropLast pi) allData
-          in case seq of
-            Concl -> 
-              let matchedId = traceShowId (filterConcl . filterByPosLR (R : pos) $ usefulData)
-              in (head matchedId, lab, addr)
-
-            Prem _ _ -> 
-              let matchedId = traceShowId (filterConcl . filterByPosLR (L : pos) $ usefulData)
-              in (head matchedId, lab, addr)
-
-applyLet :: String -> Token -> DATA -> Token
-applyLet x token@((term, pol, pos, seq, pi), lab, addr) allData =
-  case seq of
-
-    -- 1. CASO IN GAMMA: Premessa con nome 'y' diverso da 'x'
-    Prem y idx | y /= x -> 
-      case pol of
-        N -> 
-          let dataChild0 = filterByPathPi (pi ++ [0]) allData
-              dataChild1 = filterByPathPi (pi ++ [1]) allData
-              
-              targetData = if hasPremise y dataChild0 
-                             then dataChild0 
-                             else dataChild1
-                             
-              premiseData = getPremiseN y targetData
-              matchedId   = traceShowId (filterByPosLR pos premiseData)
-          in (head matchedId, lab, addr)
-
-        P -> 
-          let usefulData  = filterByPathPi (dropLast pi) allData
-              premiseData = getPremiseN y usefulData
-              matchedId   = traceShowId (filterByPosLR pos premiseData)
-          in (head matchedId, lab, addr)
-
-    -- 2. CASO NON IN GAMMA: Prem x A2+
-    Prem y _ | x == y -> 
-      case pol of
-        P -> 
-          let parentId = dropLast pi
-              usefulData = traceShowId (filterByPathPi (parentId ++ [0]) . filterConcl . filterByPosLR pos $ allData)
-          in (head usefulData, lab, addr)
-
-    Concl ->
-      case pol of
-        P -> 
-            let whichSon = last pi
-                parentId = dropLast pi
-            in 
-                if whichSon == 0
-                    then 
-                         let matchedId = traceShowId (filterByPathPi (parentId ++ [1]) . getPremiseN x . filterByPosLR (pos) $ allData)
-                         in 
-                            (head matchedId, lab, addr)
-                    else
-
-                         let matchedId = traceShowId (filterByPathPi (parentId) . filterConcl . filterByPosLR (pos) $ allData)
-                         in 
-                            (head matchedId, lab, addr)
-        N ->
-            let matchedId = traceShowId (filterByPathPi (pi ++ [1]) . filterConcl . filterByPosLR (pos) $ allData)
-            in
-                (head matchedId, lab, addr)
-
-
-applyRule :: Token -> Rule -> DATA -> Token
-applyRule tok rule allData = case rule of
-    TLAMBDA x -> applyLambda x tok allData
-    TVAR -> applyVar tok allData
-    TAPP -> applyApp tok allData
-    TTENSOR -> applyTensor tok allData
-    TDECOMP x y -> applyDecomp x y tok allData
-    TLET x -> applyLet x tok allData
-    TGATE g term -> applyGate g tok allData 
-
---------- Token Travelling
-
-stopCond :: Token -> Bool
-stopCond ((_, pol, _, _, pi), _, _) = pol == P && null pi
-
-
-travel :: Token -> DATA -> TokenState -> (Circuit, TokenState, TokenLabelList)
-travel tok allData st =
-  let rule = inferRule tok allData
-  in case rule of
-    TGATE g term | null term -> --Se e nullo allora deve segnare nel circuito
-      let -- Applica la regola del gate e aggiorna lastlabel e la label di uscita aggiornando il token 
-          ((nextId, currentLab, addr)) = applyGate g tok allData
-          
-         
-          newLblInt = lastLabel st + 1
-          nextLab   = Lab newLblInt
-          
-        
-          newCable  = makeCable g currentLab nextLab nextId
-          cableEntry = (newCable, newLblInt)
-          
-       
-          updatedTok = (nextId, nextLab, addr)
-          updatedSt  = st { lastLabel = newLblInt }
-      in
-        if stopCond updatedTok
-          then ([cableEntry], updatedSt, [(nextId,nextLab)])
-          else 
-            let (restCircuit, finalSt, finalTokLabList) = travel updatedTok allData updatedSt
-            in (cableEntry : restCircuit, finalSt, finalTokLabList)
-
-    _ ->
-      -- Per tutte le altre regole non-gate
-      let updatedTok@(finalId,finalLab,_) = applyRule tok rule allData
-      in if stopCond updatedTok
-         then ([], st,[(finalId,finalLab)])
-         else travel updatedTok allData st
-
------- Identity Application
-
-applyInitialIdentity :: Token -> Int -> (Token, CablePair, Int)
-applyInitialIdentity (tokenId, currentLab, addr) currentLastLab =
-  let nextLabInt = currentLastLab + 1
-      labNext    = Lab nextLabInt
-      -- Il cavo va dalla label con cui nasce il token (currentLab) alla nuova label (labNext)
-      initCable  = LabelI currentLab labNext
-      updatedTok = (tokenId, labNext, addr)
-  in (updatedTok, (initCable,nextLabInt), nextLabInt)
-
-
-setupInitialTokens :: [Token] -> Int -> ([Token], [CablePair], Int)
-setupInitialTokens initialToks startLabel =
-  foldl (\(tokAcc, cableAcc, currentLab) tok@(_, _, _) ->
-            let (newTok, newCablePair, nextLab) = applyInitialIdentity tok currentLab
-            in (tokAcc ++ [newTok], cableAcc ++ [newCablePair], nextLab)
-        ) ([], [], startLabel) initialToks
-
-------- Core Running Machine
-runMachine :: TokenState -> DATA -> (FinalCircuit, [(Id,Label)])
-runMachine initialState allData = 
-  let 
-    -- Applica Identita' a tutti i cavi iniziali 
-    (preparedTokens, initCables, updatedLastLab) = 
-      setupInitialTokens (tokens initialState) (lastLabel initialState)
-
-    startState = initialState 
-      { tokens    = preparedTokens
-      , lastLabel = updatedLastLab 
-      }
-
-    -- Esegue travel per ciascun token 
-    processToken (accCircuit, st, accList) tok =
-      let (tokCircuit, nextSt, tokList) = travel tok allData st
-      in (accCircuit ++ tokCircuit, nextSt, accList ++ tokList)
-
-    (finalCircuit, finalState, finalAccList) = foldl processToken ([], startState, []) preparedTokens
-
-  in 
-    -- Ritorna i cavi 'I' iniziali seguiti da tutti gli altri cavi generati
-    let (completeCables,finalState) = (initCables ++ finalCircuit, finalState) in
-    let finalCircuit = buildFinalCircuit completeCables in
-        (finalCircuit, finalAccList)
-
--- StartMachine initializeTokens
-addTokensFromData :: DATA -> TokenState -> (TokenState, [(Id,Label)])
-addTokensFromData dataList (TokenState currentTokens lastIdx) =
-  let 
-    -- Genera i nuovi token partendo da (lastIdx + 1)
-    newTokens = zipWith (\id' idx -> (id', Lab idx, emptyAddress)) dataList [lastIdx + 1 ..]
-    assocList = map (\(id', lab, _) -> (id', lab)) newTokens   
-    -- L'ultimo indice diventa lastIdx + elementi aggiunti
-    updatedLastIdx = lastIdx + length dataList
-  in 
-    ((TokenState (currentTokens ++ newTokens) updatedLastIdx), assocList)
-
-startMachine :: TypeDerivation -> (FinalCircuit, TokenLabelList, TokenLabelList)
-startMachine derivation =
-  let
-    allData                   = extractDataRecursive derivation []
-    initials                  = findInitials allData
-    (tokensState, assocList)  = addTokensFromData initials emptyTokenState
-    (final, finalList)        = runMachine tokensState allData
-  in
-    (final, assocList, finalList)
-{-
-startMachine :: TypeDerivation -> (FinalCircuit,TokenLabelList)
-startMachine derivation =
-    let
-        allData = extractDataRecursive derivation []
-    in
-        let 
-            initials = findInitials allData
-        in 
-            prettyPrintData "DATA" allData
-            let 
-                initials = findInitials allData
-            in 
-                let
-                    (tokensState, assocList) = addTokensFromData initials emptyTokenState 
-                in
-                    let
-                        final = runMachine tokensState allData 
-                    in 
-                        (final, assocList)
--}
---- DataExtraction/Indexing
-extractDataRecursive :: TypeDerivation -> [PosInPi] -> DATA
-extractDataRecursive (Node concl forest) pathPi =
-    let 
-        --Extract current Judgment Data
-        currentData = processJudgment concl pathPi
-        
-        --Recursive Calls
-        processForest :: [TypeDerivation] -> Int -> DATA
-        processForest [] _ = []
-        processForest (child : cs) idx =
-            let childD = extractDataRecursive child (pathPi ++ [idx])
-                restD  = processForest cs (idx + 1)
-            in childD ++ restD
-
-        subData = processForest forest 0
-            
-    in
-        --Create All Datas
-        currentData ++ subData
-
-processJudgment :: Concl -> [PosInPi] -> DATA
-processJudgment (prems, conclTerm, typ) pathPi = 
-  let
-    -- Processa tutte le premesse (Prem)
-    premData = processPremises prems conclTerm pathPi
-    
-    -- Processa la conclusione
-    conclData = processConcl conclTerm typ pathPi
-  in
-    -- Unisce i risultati
-    premData ++ conclData
-
-processPremises :: Prem -> TypedTerm -> [PosInPi] -> DATA
-processPremises premMap typedTerm pathPi =
-    processList (Map.toList premMap) 0
-  where
-    
-    processList :: [(String, Type)] -> Int -> DATA
-    processList [] _ = []
-    processList ((name, typ) : rest) premIdx =
-      let 
-
-        -- Analisi della singola premessa poi di tutte le premesse
-        currentD = inspectPremiseType [] True name typ premIdx
-        
-        restD       = processList rest (premIdx + 1)
-      in 
-      -- Concatenazione tutti i risultat
-        currentD ++ restD
-
-    inspectPremiseType :: [Position] -> Bool -> String -> Type -> Int -> DATA
-    inspectPremiseType lrPath isPositive name TQbit premIdx =
-      if isPositive
-        then 
-            let currentId = (typedTerm, N, lrPath, Prem name premIdx, pathPi) in [currentId]
-        else
-            let currentId = (typedTerm, P, lrPath, Prem name premIdx, pathPi) in [currentId]
-
-
-    inspectPremiseType lrPath isPositive name (TFun t1 t2) premIdx =
-      let d1 = inspectPremiseType (lrPath ++ [L]) (not isPositive) name t1 premIdx
-          d2 = inspectPremiseType (lrPath ++ [R]) isPositive name t2 premIdx
-      in (d1 ++ d2)
-
-    inspectPremiseType lrPath isPositive name (TPair t1 t2) premIdx =
-      let d1 = inspectPremiseType (lrPath ++ [L]) isPositive name t1 premIdx
-          d2 = inspectPremiseType (lrPath ++ [R]) isPositive name t2 premIdx
-      in d1 ++ d2
-
-
-processConcl :: TypedTerm -> Type -> [PosInPi] -> DATA
-processConcl typedTerm typ pathPi = inspectType [] True typ
-  where
-    inspectType :: [Position] -> Bool -> Type -> DATA
-    
-    inspectType lrPath isPositive TQbit =
-      if isPositive
-        then 
-            let currentId = (typedTerm, P, lrPath, Concl, pathPi) in [currentId]
-        else
-            let currentId = (typedTerm, N, lrPath, Concl, pathPi) in [currentId]
-
-    inspectType lrPath isPositive TBit =
-      if isPositive
-        then 
-            let currentId = (typedTerm, P, lrPath, Concl, pathPi) in [currentId]
-        else
-            let currentId = (typedTerm, N, lrPath, Concl, pathPi) in [currentId]
-
-    inspectType lrPath isPositive (TFun t1 t2) =
-      let d1 = inspectType (lrPath ++ [L]) (not isPositive) t1
-          d2 = inspectType (lrPath ++ [R]) isPositive t2
-      in d1 ++ d2
-
-    inspectType lrPath isPositive (TPair t1 t2) =
-      let d1 = inspectType (lrPath ++ [L]) isPositive t1
-          d2 = inspectType (lrPath ++ [R]) isPositive t2
-      in d1 ++ d2
--------------------
---Utils
-dropLast :: [a] -> [a]
-dropLast []       = []
-dropLast [_]      = []  
-dropLast (x:xs)   = x : dropLast xs
-
-getTerm :: Id -> TypedTerm
-getTerm (term, _, _, _, _) = term
-
-hasPremise :: String -> DATA -> Bool
-hasPremise y d = not (null (getPremiseN y d))
-
-getVarName :: TypedTerm -> String
-getVarName (TV (TVar name _) _) = name
-getVarName _                     = error "Atteso un TVar all'interno del termine da decomporre"
----- Travelling Utils
-
-findInitials :: DATA -> DATA
-findInitials allData =
-  let 
-
-    rootPremiseTokens = filterByPathPi [] . filterByPolarity N $ allData
-
-    newTokens = filter isNewPositive allData
-  in 
-    rootPremiseTokens ++ newTokens
-  where
-    isNewPositive (term, pol, _, _, _) = 
-      pol == P && case term of
-                    TNew _ _ _ -> True
-                    _          -> False
-
-
-findFirstLevel :: DATA -> DATA
-findFirstLevel = filterByPathPi [0] . filterByPolarity P
-
-filterByPathPi :: [PosInPi] -> [Id] -> [Id]
-filterByPathPi targetPath = filter (\( _, _, _, _, pathPi) -> pathPi == targetPath)
-
-filterByPolarity :: Polarity -> [Id] -> [Id]
-filterByPolarity targetPol = filter (\( _, pol, _, _, _) -> pol == targetPol)
-
-filterBySeq :: PosInSeq -> [Id] -> [Id]
-filterBySeq targetSeq = filter (\( _, _, _, seq, _) -> seq == targetSeq)
-
-filterConcl :: [Id] -> [Id]
-filterConcl = filterBySeq Concl
-
-filterByPosLR :: [Position] -> DATA -> DATA
-filterByPosLR targetLR = filter (\(_, _, lrPath, _, _) -> lrPath == targetLR)
-
-filterPremises :: [Id] -> [Id]
-filterPremises = filter (\( _, _, _, seq, _) -> isPremise seq)
-  where
-    isPremise (Prem _ _) = True
-    isPremise Concl       = False
-
-getPremiseN :: String -> DATA -> DATA
-getPremiseN targetName = filter isTargetPrem
-  where
-    isTargetPrem (_, _, _, Prem x _, _) = x == targetName
-    isTargetPrem _                      = False
---Pretty
-
-prettyId :: Id -> String
-prettyId (typedTerm, pol, lrPath, posSeq, pathPi) =
-  let
-    -- Formattazione della posizione nella sequenza (Concl o Prem n)
-    seqStr = case posSeq of
-      Concl      -> "CONCL "
-      Prem x n  -> "PREM " ++ show x ++ show n
-
-    -- Polarità come simbolo (+) o (-)
-    polStr = case pol of
-      P -> "(+)"
-      N -> "(-)"
-
-    -- Cammino L/R (es. [L, R] -> "L.R", [] -> "ε")
-    lrStr = if null lrPath 
-              then "ε" 
-              else foldr1 (\a b -> a ++ "." ++ b) (map show lrPath)
-
-    -- Cammino nell'albero Pi (es. [0, 1] -> "π[0.1]")
-    piStr = "π" ++ show pathPi
-
-    -- Estraiamo solo il tipo o il termine per brevità (o usiamo `show typedTerm`)
-    termStr = show typedTerm 
-  in
-    concat [ "[", seqStr, " | ", piStr, "] "
-           , polStr, " LR: ", lrStr
-           , "  ==>  ", termStr
-           ]
-
--- | Stampa un intero DATA / NDATA ([Id]) riga per riga con numerazione
-prettyPrintData :: String -> DATA -> IO ()
-prettyPrintData label dataList = do
-  putStrLn $ "\n" ++ replicate 10 '=' ++ " " ++ label ++ " (" ++ show (length dataList) ++ " elementi) " ++ replicate 10 '='
-  mapM_ (\(i, item) -> putStrLn $ show i ++ ". " ++ prettyId item) (zip [1..] dataList)
-  putStrLn $ replicate (22 + length label + length (show (length dataList))) '='
+buildFinalCircuit (c : rest) = case c of
+  Wire g lIn lOut -> SingleGate g lIn lOut : buildFinalCircuit rest
+  HalfCNOT side ref lIn1 lOut1 -> case findAndRemoveCNOT side ref rest of
+    Just (lIn2, lOut2, remaining) -> FullCNOT lIn1 lOut1 lIn2 lOut2 : buildFinalCircuit remaining
+    Nothing -> error ("Errore: CNOT DEVE avere la sua parte L o R: " ++ show ref)
+
+------------------------------------------------------------------------------
+-- Pretty
+------------------------------------------------------------------------------
+
+showPos :: Pos -> String
+showPos (Pos z (Occ f path pol)) =
+  "(" ++ show pol ++ ", " ++ show path ++ ", " ++ show f ++ ", " ++ show (pathOf z) ++ ")"
+
+prettyPos :: Pos -> String
+prettyPos (Pos z (Occ f path pol)) =
+  let polStr = case pol of P -> "(+)"; N -> "(-)"
+      lrStr  = if null path then "ε" else foldr1 (\a b -> a ++ "." ++ b) (map show path)
+  in concat [ "[", show f, " | π", show (pathOf z), "] ", polStr, " LR: ", lrStr
+            , "  ==>  ", show (termOf z) ]
+
+prettyPrintPositions :: String -> [Pos] -> IO ()
+prettyPrintPositions label ps = do
+  putStrLn $ "\n" ++ replicate 10 '=' ++ " " ++ label ++ " (" ++ show (length ps) ++ " elementi) " ++ replicate 10 '='
+  mapM_ (\(i, p) -> putStrLn $ show (i :: Int) ++ ". " ++ prettyPos p) (zip [1 ..] ps)
 
 prettyPrintTokens :: String -> [Token] -> IO ()
 prettyPrintTokens title [] = putStrLn $ "=== " ++ title ++ " (Vuoto) ==="
 prettyPrintTokens title toks = do
-    putStrLn $ "\n=== " ++ title ++ " (" ++ show (length toks) ++ " token) ==="
-    mapM_ printToken toks
-  where
-    printToken :: Token -> IO ()
-    printToken (id', lab, addr) = do
-        -- Scompattiamo l'Id interno
-        let (term, pol, pos, seq, pi) = id'
-            posSeqStr = case seq of
-                Concl       -> "CONCL"
-                Prem name n -> "PREM(" ++ name ++ "," ++ show n ++ ")"
-        
-        -- Stampa formattata sulla stessa linea
-        putStrLn $ "TOKEN " 
-                ++ "| Lab: " ++ show lab 
-                ++ " | Addr: " ++ show addr 
-                ++ " | Pol: " ++ show pol 
-                ++ " | Seq: " ++ posSeqStr 
-                ++ " | LR: " ++ show pos 
-                ++ " | Pi: " ++ show pi 
-                ++ " | Term: " ++ show term
+  putStrLn $ "\n=== " ++ title ++ " (" ++ show (length toks) ++ " token) ==="
+  mapM_ (\t -> putStrLn $ "TOKEN | Lab: " ++ show (tokLabel t)
+                       ++ " | Addr: " ++ show (tokAddr t)
+                       ++ " | " ++ prettyPos (tokPos t)) toks
 
-formatTokenLabelList :: [(Id, Label)] -> String
-formatTokenLabelList assocList = 
-  unlines $ "--- TOKEN - LABEL ASSOC LIST ---" : map formatEntry assocList
-  where
-    formatEntry ((_, pol, pos, seq, pi), label) = 
-      "  Token (" ++ show pol ++ ", " ++ show pos ++ ", " ++ show seq ++ ", " ++ show pi ++ ") ==> " ++ show label
+formatTokenAssoc :: (Pos, Label) -> String
+formatTokenAssoc (Pos z (Occ f path pol), lab) =
+  "(" ++ show pol ++ ", " ++ show path ++ ", " ++ show f ++ ", " ++ show (pathOf z) ++ ", " ++ show lab ++ ")"
 
-formatTokenAssoc :: (Id, Label) -> String
-formatTokenAssoc ((_, pol, pos, seq, pi), lab) =
-  "(" ++ show pol ++ ", " ++ show pos ++ ", " ++ show seq ++ ", " ++ show pi ++ ", " ++ show lab ++ ")"
-
-prettyPrintLists :: [(Id, Label)] -> [(Id, Label)] -> String
-prettyPrintLists [] [] = ""
-prettyPrintLists ((idStart, labStart):xs) ((idEnd, labEnd):ys) =
-  formatTokenAssoc (idStart, labStart) ++ " ends in " ++ formatTokenAssoc (idEnd, labEnd) ++ "\n" ++ prettyPrintLists xs ys
+prettyPrintLists :: TokenLabelList -> TokenLabelList -> String
+prettyPrintLists (s : xs) (e : ys) =
+  formatTokenAssoc s ++ " ends in " ++ formatTokenAssoc e ++ "\n" ++ prettyPrintLists xs ys
 prettyPrintLists _ _ = ""
 
--- Funzione IO per stampare direttamente a schermo
-prettyPrintAssocList :: [(Id, Label)] -> [(Id,Label)] -> IO ()
+prettyPrintAssocList :: TokenLabelList -> TokenLabelList -> IO ()
 prettyPrintAssocList initList endingList = putStrLn (prettyPrintLists initList endingList)
-

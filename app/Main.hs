@@ -1,7 +1,7 @@
 module Main where
 
 import Text.Pretty.Simple (pPrint)
-import Text.Megaparsec
+import Text.Megaparsec hiding (Pos)
 import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
 import Data.Void
@@ -9,13 +9,11 @@ import Lexer
 import TypeTree
 import CreateDerivation
 import CircuitGraph
+import DerivationZipper (termOf)
+import qualified Data.Map as Map
 import System.Environment (getArgs, getProgName)
 
--- JOSE:
-import Data.List (nub, sort)
-import qualified Data.Map as Map
-
--- Parsing Dei tipi
+-- Type parsing
 pTypeAtom :: Parser Type
 pTypeAtom = 
       (rWord "bit"  >> return TBit)
@@ -162,8 +160,32 @@ varParser = do
     
 
 
-mainParser :: Parser Term
-mainParser = sc *> termParser <* eof 
+-- Context Parser: x1 : A1, ..., xn : An (possibly empty)
+bindingParser :: Parser (Name, Type)
+bindingParser = do
+    x <- identifier
+    colon
+    tipo <- pType
+    return (x, tipo)
+
+contextParser :: Parser Context
+contextParser = do
+    ctx <- bindingParser `sepBy` comma
+    case [ x | (i, (x, _)) <- zip [0 :: Int ..] ctx, x `elem` map fst (take i ctx) ] of
+        []      -> return ctx
+        (x : _) -> fail $ "Variable '" ++ x ++ "' is declared twice in the context"
+
+-- Sequent: Gamma |- M. Without a turnstile the whole file is the term and
+-- the context is empty.
+sequentParser :: Parser (Context, Term)
+sequentParser = do
+    hasTurnstile <- option False (True <$ try (lookAhead (skipManyTill anySingle turnstile)))
+    ctx <- if hasTurnstile then contextParser <* turnstile else return []
+    t <- termParser
+    return (ctx, t)
+
+mainParser :: Parser (Context, Term)
+mainParser = sc *> sequentParser <* eof 
 
 main :: IO ()
 main = do
@@ -175,23 +197,22 @@ main = do
             putStrLn $ "FILE: " ++ show contenuto
             case Text.Megaparsec.runParser mainParser "" contenuto of
                 Left err -> putStrLn $ "Errore di Sintassi: " ++ show err
-                Right ast -> do
+                Right (initialCtx, ast) -> do
 --                    pPrint ast
-                    let initialCtx = [("q1", TQbit), ("q2", TQbit), ("q3", TQbit)]
                     case annotate initialCtx ast of
                         Left typeErr -> putStrLn $ "Errore di Tipo/Linearità: " ++ typeErr
                         Right (typedAST, remainingCtx) -> do
-                            let c = startDerivation typedAST in do
-                                let (final, assocList, finalList) = startMachine c
-                                printAsciiCircuit final
-                                prettyPrintRootType c
-                                pPrint c
-                            {-let c = startDerivation typedAST in do
+  --                          pPrint typedAST
+                            let c = startDerivation (Map.fromList initialCtx) typedAST in
 --                                printDerivation c
-                                let (final, assocList, finalList) = startMachine c
-                                print final
-                                prettyPrintRootType c
-                                prettyPrintAssocList assocList finalList-}
+                                case startMachine c of
+                                  Left machineErr -> putStrLn $ "Errore della macchina: " ++ machineErr
+                                  Right (final, assocList, finalList) -> do
+                                    print final
+                                    prettyPrintRootType c
+                                    prettyPrintAssocList assocList finalList
+                                    let wireNames = [ (lab, wireName p) | (p, lab) <- assocList ++ finalList ]
+                                    printAsciiCircuit wireNames final
         [] -> putStrLn "Errore: Devi specificare il nome di un file! (es. cabal run -- file.qqdc)"
 
 
@@ -207,77 +228,93 @@ formatRootType derivation = "Root Type: " ++ show (getRootType derivation)
 prettyPrintRootType :: TypeDerivation -> IO ()
 prettyPrintRootType derivation = putStrLn (formatRootType derivation)
 
--- 
 
--- | Converts a FinalCircuit into a visual ASCII diagram with spacer rows
-printAsciiCircuit :: [TransformedGate] -> IO ()
-printAsciiCircuit gates = do
-    let -- 1. Trace dynamic labels to their root physical wires
-        buildRoots m (GateI (Lab i) (Lab o)) = Map.insert o (findRoot i m) m
-        buildRoots m (SingleGate _ (Lab i) (Lab o)) = Map.insert o (findRoot i m) m
-        buildRoots m (FullCNOT (Lab ci) (Lab co) (Lab ti) (Lab to)) = 
-            Map.insert to (findRoot ti m) (Map.insert co (findRoot ci m) m)
-        findRoot x m = Map.findWithDefault x x m
-        rootMap = foldl buildRoots Map.empty gates
+gateInputs, gateOutputs :: TransformedGate -> [Label]
+gateInputs  (SingleGate _ i _)     = [i]
+gateInputs  (FullCNOT i1 _ i2 _)   = [i1, i2]
+gateOutputs (SingleGate _ _ o)     = [o]
+gateOutputs (FullCNOT _ o1 _ o2)   = [o1, o2]
 
-        -- 2. Convert raw gates to generic logical operations
-        toLogical (GateI _ _) = []
-        toLogical (SingleGate name (Lab i) _) = [(name, [findRoot i rootMap])]
-        toLogical (FullCNOT (Lab ci) _ (Lab ti) _) = [("CNOT", [findRoot ci rootMap, findRoot ti rootMap])]
-        logGates = concatMap toLogical gates
+isIdentityGate :: TransformedGate -> Bool
+isIdentityGate (SingleGate "I" _ _) = True
+isIdentityGate _                    = False
 
-        -- 3. Remap root labels to sequential qubit indices (0, 1, 2...)
-        uniqueRoots = sort $ nub $ concatMap snd logGates
-        qIndex r = maybe 0 id (lookup r (zip uniqueRoots [0..]))
-        mappedGates = map (\(n, qs) -> (n, map qIndex qs)) logGates
-        
-        numQubits = length uniqueRoots
-        
-        -- 4. ASCII Drawing Logic with Spacer Rows
-        folder lines (name, [q]) = 
-            let maxLen = maximum (map length lines)
-                -- Pad existing lines with '─' for wires (even) and ' ' for spacers (odd)
-                padded = zipWith (\i l -> l ++ replicate (maxLen - length l) (if even i then '─' else ' ')) [0..] lines
-                wireIdx = q * 2
-                
-                updateLine i str
-                    | i == wireIdx = str ++ (if name == "I" then "──" else "──[" ++ name ++ "]──")
-                    | even i       = str ++ replicate (length name + 4) '─'
-                    | otherwise    = str ++ replicate (length name + 4) ' '
-                
-            in zipWith updateLine [0..] padded
+-- Readable name of the wire starting/ending at a position: the context
+-- variable, the name of the `new`, or the L/R path in the conclusion.
+wireName :: Pos -> String
+wireName (Pos z (Occ f path _)) = case (f, termOf z) of
+  (InPrem x, _)         -> x
+  (InConcl, TNew _ v _) -> v
+  (InConcl, _)          -> show path
 
-        folder lines ("CNOT", [q1, q2]) = 
-            let maxLen = maximum (map length lines)
-                padded = zipWith (\i l -> l ++ replicate (maxLen - length l) (if even i then '─' else ' ')) [0..] lines
-                minIdx = min q1 q2 * 2
-                maxIdx = max q1 q2 * 2
-                
-                updateLine i str
-                    | i == q1 * 2 = str ++ "───●───"
-                    | i == q2 * 2 = str ++ "──(X)──"
-                    | i > minIdx && i < maxIdx && even i = str ++ "───|───" -- cross-wire
-                    | i > minIdx && i < maxIdx && odd i  = str ++ "   |   " -- cross-spacer
-                    | even i                             = str ++ "───────" -- empty wire
-                    | otherwise                          = str ++ "       " -- empty spacer
-                
-            in zipWith updateLine [0..] padded
-            
-        folder lines _ = lines -- Fallback
+-- Arguments: names associated with the initial/final labels (may be empty) and the circuit.
+asciiCircuit :: [(Label, String)] -> FinalCircuit -> String
+asciiCircuit names circuit
+  | null circuit = "(circuito vuoto)"
+  | otherwise    = unlines (concat (zipWith rowLines [0 ..] rows))
+  where
+    indexed  = zip [0 :: Int ..] circuit
+    gateAt i = circuit !! i
+    producer = Map.fromList [ (o, gi) | (gi, g) <- indexed, o <- gateOutputs g ]
+    consumer = Map.fromList [ (i, gi) | (gi, g) <- indexed, i <- gateInputs g ]
 
-        -- Generate initial prefixes and blank spacer rows
-        prefix i = "q" ++ show i ++ ": "
-        maxPref = if numQubits == 0 then 0 else maximum (map (length . prefix) [0..numQubits-1])
-        padPref s = s ++ replicate (maxPref - length s) ' '
-        
-        initialLines = concat [ [padPref (prefix i)] ++ if i < numQubits - 1 then [replicate maxPref ' '] else [] | i <- [0 .. numQubits-1] ]
-        
-        finalLines = foldl folder initialLines mappedGates
+    labInt (Lab n) = n
+    initials = map snd (Map.toAscList (Map.fromList
+                 [ (labInt l, l) | g <- circuit, l <- gateInputs g, not (Map.member l producer) ]))
 
-    putStrLn "=============================\n"
-    if null logGates 
-       then putStrLn "(Empty Circuit)"
-       else mapM_ putStrLn finalLines
-    putStrLn "=============================\n"
+    -- Column of each gate (lazy map: the circuit is acyclic)
+    cols :: Map.Map Int Int
+    cols = Map.fromList [ (gi, colOf gi g) | (gi, g) <- indexed ]
+    colOf _ g =
+      let base = maximum ((-1) : [ cols Map.! p | i <- gateInputs g, Just p <- [Map.lookup i producer] ])
+      in if isIdentityGate g then base else base + 1
+    -- one extra final column, so that a wire with no gates is still drawn
+    nCols = 2 + maximum ((-1) : [ c | (gi, c) <- Map.toList cols, not (isIdentityGate (gateAt gi)) ])
 
+    -- Wire: (initial label, gates crossed, final label)
+    outFor (SingleGate _ _ o) _ = o
+    outFor (FullCNOT i1 o1 _ o2) l = if l == i1 then o1 else o2
+    chain l = case Map.lookup l consumer of
+      Nothing -> ([], l)
+      Just gi -> let (gs, end) = chain (outFor (gateAt gi) l) in (gi : gs, end)
+    rows = [ (l, gs, end) | l <- initials, let (gs, end) = chain l ]
 
+    -- Row of a gate: the row whose wire crosses it with the given label
+    rowOfLabel = Map.fromList
+      [ (lab, r) | (r, (l0, gs, _)) <- zip [0 :: Int ..] rows
+                 , lab <- l0 : concat [ gateOutputs (gateAt gi) | gi <- gs ] ]
+    rowIn lab = Map.findWithDefault (-1) lab rowOfLabel
+
+    cnotSpans = [ (cols Map.! gi, min r1 r2, max r1 r2)
+                | (gi, FullCNOT i1 _ i2 _) <- indexed, let r1 = rowIn i1, let r2 = rowIn i2 ]
+
+    -- Column where the wire becomes classical (after an M), if any
+    measureCol gs = case [ cols Map.! gi | gi <- gs, SingleGate "M" _ _ <- [gateAt gi] ] of
+      []      -> Nothing
+      (c : _) -> Just c
+
+    nameOf l = maybe "" (\s -> s ++ " ") (lookup l names) ++ show l
+    leftWidth = maximum (0 : [ length (nameOf l) | (l, _, _) <- rows ])
+    padRight n s = s ++ replicate (n - length s) ' '
+
+    cell :: [Int] -> Maybe Int -> Int -> Int -> String
+    cell gs mCol r c =
+      let wire = if maybe False (< c) mCol then '=' else '-'
+          plain = replicate 5 wire
+          here = [ gateAt gi | gi <- gs, cols Map.! gi == c, not (isIdentityGate (gateAt gi)) ]
+      in case here of
+           (SingleGate g _ _ : _)   -> [wire, wire] ++ take 1 g ++ [wire, wire]
+           (FullCNOT i1 _ _ _ : _)  -> [wire, wire] ++ (if rowIn i1 == r then "o" else "X") ++ [wire, wire]
+           []                       -> plain
+
+    gapCell r c = if any (\(cc, lo, hi) -> cc == c && lo <= r && r < hi) cnotSpans then "  |  " else "     "
+
+    rowLines r (l0, gs, end) =
+      let mCol  = measureCol gs
+          body  = concatMap (cell gs mCol r) [0 .. nCols - 1]
+          line  = padRight leftWidth (nameOf l0) ++ " " ++ body ++ " " ++ nameOf end
+          gap   = replicate (leftWidth + 1) ' ' ++ concatMap (gapCell r) [0 .. nCols - 1]
+      in if r < length rows - 1 then [line, gap] else [line]
+
+printAsciiCircuit :: [(Label, String)] -> FinalCircuit -> IO ()
+printAsciiCircuit names circuit = putStr (asciiCircuit names circuit)
