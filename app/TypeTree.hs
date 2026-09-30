@@ -16,7 +16,7 @@ data Term
   | Gate Name [Term]                  -- U(v1...vn) such as H, X, CNOT
   | V Value
   deriving (Show)
-
+ 
 data Value
   = Var Name
   | Lambda Name Type Term

@@ -3,35 +3,35 @@ module Main where
 import Text.Pretty.Simple (pPrint)
 import Text.Megaparsec hiding (Pos)
 import Text.Megaparsec.Char
-import qualified Text.Megaparsec.Char.Lexer as L
-import Data.Void
+import qualified Text.Megaparsec.Char.Lexer()
+import Data.Void()
 import Lexer
 import TypeTree
 import CreateDerivation
 import CircuitGraph
 import DerivationZipper (termOf)
 import qualified Data.Map as Map
-import System.Environment (getArgs, getProgName)
+import System.Environment (getArgs)
 
 -- Type parsing
 pTypeAtom :: Parser Type
-pTypeAtom = 
+pTypeAtom =
       (rWord "bit"  >> return TBit)
   <|> (rWord "qbit" >> return TQbit)
-  <|> parens pType  
+  <|> parens pType
 
 pType :: Parser Type
 pType = do
   t1 <- pTypeAtom
-  (do 
-      symbol "->" 
-      t2 <- pType 
+  do
+      symbol "->"
+      t2 <- pType
       return (TFun t1 t2)
-   <|> do 
-      tensor 
-      t2 <- pType 
+   <|> do
+      tensor
+      t2 <- pType
       return (TPair t1 t2)
-   <|> return t1) 
+   <|> return t1
 
 --------
 ---- Term Parser
@@ -47,35 +47,32 @@ letParser = do
     v <- identifier
     colon
     tipo <- pType
-    equal 
-    t1 <- termParser  
+    equal
+    t1 <- termParser
     rWord "in"
-    t2 <- termParser
-    return(Let v tipo t1 t2)
+    Let v tipo t1 <$> termParser
 
 decompParser :: Parser Term
 decompParser = do
-    rWord "let"
+    _        <- rWord "let"
     (i1, i2) <- angles $ do
         v1 <- identifier
         comma
         v2 <- identifier
         return (v1, v2)
-    equal
-    t1 <- termParser
-    rWord "in"
-    t2 <- termParser
-    return(Decomp i1 i2 t1 t2)
+    _        <- equal
+    t1       <- termParser
+    _        <- rWord "in"
+    Decomp i1 i2 t1 <$> termParser
 
 ifParser :: Parser Term
 ifParser = do
-    rWord "if"
-    v <- termParser
-    rWord "then"
+    _  <-rWord "if"
+    v  <- termParser
+    _  <- rWord "then"
     t1 <- termParser
-    rWord "else"
-    t2 <- termParser
-    return(If v t1 t2)
+    _  <- rWord "else"
+    If v t1 <$> termParser
 
 newParser :: Parser Term
 newParser = do
@@ -83,7 +80,7 @@ newParser = do
     val <- parens integer <|> integer
     if val == 0 || val == 1
         then return (New val)
-        else fail "L'argomento di 'new' deve essere 0 oppure 1"
+        else fail "The argument for 'new' must be 0 or 1"
 
 validGates :: Parser String
 validGates = choice [ string "H"
@@ -94,32 +91,32 @@ validGates = choice [ string "H"
 
 gateParser :: Parser Term
 gateParser = do
-    name <- identifier 
+    name <- identifier
     case name of
         "CNOT" -> do
 
             args <- parens $ do
                 t1 <- termParser
-                comma
+                _  <- comma
                 t2 <- termParser
                 return [t1, t2]
             return (Gate name args)
-            
-        "H" -> oneArgGate name
-        "X" -> oneArgGate name
-        "M" -> oneArgGate name
+
+        "H"    -> oneArgGate name
+        "X"    -> oneArgGate name
+        "M"    -> oneArgGate name
 
         _ -> fail $ "Unknown gate: " ++ name
 
 oneArgGate :: String -> Parser Term
 oneArgGate name = do
-    arg <- parens termParser 
+    arg <- parens termParser
     return (Gate name [arg])
 
 ----
 
 atomParser :: Parser Term
-atomParser = (V <$> valueParser)
+atomParser = V <$> valueParser
     <|> parens termParser
 
 applicationParser:: Parser Term
@@ -130,34 +127,32 @@ applicationParser = do
 --------
 
 valueParser :: Parser Value
-valueParser = try pairParser <|> try  lambdaParser <|> varParser 
+valueParser = try pairParser <|> try  lambdaParser <|> varParser
 
 
 lambdaParser :: Parser Value
 lambdaParser = do
-    lambda
-    x <- identifier
-    colon
+    _    <- lambda
+    x    <- identifier
+    _    <- colon
     tipo <- pType
-    dot
-    t <- termParser
-    return(Lambda x tipo t)
+    _    <- dot
+    Lambda x tipo <$> termParser
 
 pairParser :: Parser Value
 pairParser = do
     (i1, i2) <- angles $ do
-        v1 <- termParser
-        comma
-        v2 <- termParser
+        v1   <- termParser
+        _    <- comma
+        v2   <- termParser
         return (v1, v2)
-    return(Tensor i1 i2)
+    return (Tensor i1 i2)
 
 
 varParser :: Parser Value
 varParser = do
-    v <- identifier
-    return(Var v)
-    
+    Var <$> identifier
+
 
 
 -- Context Parser: x1 : A1, ..., xn : An (possibly empty)
@@ -175,8 +170,7 @@ contextParser = do
         []      -> return ctx
         (x : _) -> fail $ "Variable '" ++ x ++ "' is declared twice in the context"
 
--- Sequent: Gamma |- M. Without a turnstile the whole file is the term and
--- the context is empty.
+-- Γ |- M, if |- M or just M context is considered empty
 sequentParser :: Parser (Context, Term)
 sequentParser = do
     hasTurnstile <- option False (True <$ try (lookAhead (skipManyTill anySingle turnstile)))
@@ -185,40 +179,41 @@ sequentParser = do
     return (ctx, t)
 
 mainParser :: Parser (Context, Term)
-mainParser = sc *> sequentParser <* eof 
+mainParser = sc *> sequentParser <* eof
 
 main :: IO ()
 main = do
     args <- getArgs
-    putStrLn $ "Argomenti ricevuti: " ++ show args
+    putStrLn $ "Arguments received " ++ show args
     case args of
         (filePath:_) -> do
             contenuto <- readFile filePath
             putStrLn $ "FILE: " ++ show contenuto
             case Text.Megaparsec.runParser mainParser "" contenuto of
-                Left err -> putStrLn $ "Errore di Sintassi: " ++ show err
-                Right (initialCtx, ast) -> do
---                    pPrint ast
-                    case annotate initialCtx ast of
-                        Left typeErr -> putStrLn $ "Errore di Tipo/Linearità: " ++ typeErr
-                        Right (typedAST, remainingCtx) -> do
+                Left err -> putStrLn $ "Syntax Error: " ++ show err
+                Right (ctx, term) -> do
+                    pPrint term
+                    pPrint ctx
+                    case annotate ctx term of
+                        Left typeErr -> putStrLn $ "Type/Linearity Error: " ++ typeErr
+                        Right (_, typedAST) -> do
   --                          pPrint typedAST
-                            let c = startDerivation (Map.fromList initialCtx) typedAST in
+                            let c = startDerivation (Map.fromList ctx) typedAST in
 --                                printDerivation c
                                 case startMachine c of
-                                  Left machineErr -> putStrLn $ "Errore della macchina: " ++ machineErr
+                                  Left machineErr -> putStrLn $ "Machine error: " ++ machineErr
                                   Right (final, assocList, finalList) -> do
                                     print final
                                     prettyPrintRootType c
                                     prettyPrintAssocList assocList finalList
                                     let wireNames = [ (lab, wireName p) | (p, lab) <- assocList ++ finalList ]
                                     printAsciiCircuit wireNames final
-        [] -> putStrLn "Errore: Devi specificare il nome di un file! (es. cabal run -- file.qqdc)"
+        [] -> putStrLn "Error: You must specify a filename! (e.g., cabal run -- file.qqdc)"
 
 
 -- Printing Root Type
 getRootType :: TypeDerivation -> Type
-getRootType derivation = 
+getRootType derivation =
   let (_, _, rootType) = rootLabel derivation
   in rootType
 
@@ -250,7 +245,7 @@ wireName (Pos z (Occ f path _)) = case (f, termOf z) of
 -- Arguments: names associated with the initial/final labels (may be empty) and the circuit.
 asciiCircuit :: [(Label, String)] -> FinalCircuit -> String
 asciiCircuit names circuit
-  | null circuit = "(circuito vuoto)"
+  | null circuit = "(empty circuit)"
   | otherwise    = unlines (concat (zipWith rowLines [0 ..] rows))
   where
     indexed  = zip [0 :: Int ..] circuit
@@ -293,7 +288,7 @@ asciiCircuit names circuit
       []      -> Nothing
       (c : _) -> Just c
 
-    nameOf l = maybe "" (\s -> s ++ " ") (lookup l names) ++ show l
+    nameOf l = maybe "" (++ " ") (lookup l names) ++ show l
     leftWidth = maximum (0 : [ length (nameOf l) | (l, _, _) <- rows ])
     padRight n s = s ++ replicate (n - length s) ' '
 
