@@ -9,7 +9,7 @@ import Lexer
 import TypeTree
 import CreateDerivation
 import CircuitGraph
-import DerivationZipper (termOf)
+import DerivationZipper (termOf, fromTree)
 import qualified Data.Map as Map
 import System.Environment (getArgs)
 
@@ -81,13 +81,6 @@ newParser = do
     if val == 0 || val == 1
         then return (New val)
         else fail "The argument for 'new' must be 0 or 1"
-
-validGates :: Parser String
-validGates = choice [ string "H"
-                    , string "X"
-                    , string "CNOT"
-                    , string "M"
-                    ] <* sc
 
 gateParser :: Parser Term
 gateParser = do
@@ -192,22 +185,20 @@ main = do
             case Text.Megaparsec.runParser mainParser "" contenuto of
                 Left err -> putStrLn $ "Syntax Error: " ++ show err
                 Right (ctx, term) -> do
-                    pPrint term
-                    pPrint ctx
                     case annotate ctx term of
                         Left typeErr -> putStrLn $ "Type/Linearity Error: " ++ typeErr
                         Right (_, typedAST) -> do
-  --                          pPrint typedAST
-                            let c = startDerivation (Map.fromList ctx) typedAST in
---                                printDerivation c
-                                case startMachine c of
-                                  Left machineErr -> putStrLn $ "Machine error: " ++ machineErr
-                                  Right (final, assocList, finalList) -> do
-                                    print final
-                                    prettyPrintRootType c
-                                    prettyPrintAssocList assocList finalList
-                                    let wireNames = [ (lab, wireName p) | (p, lab) <- assocList ++ finalList ]
-                                    printAsciiCircuit wireNames final
+                            pPrint (startDerivation (Map.fromList ctx) typedAST)
+                            let c = startDerivation (Map.fromList ctx) typedAST
+                            prettyPrintPositions "Initials positions: " (findInitials (fromTree c))
+                            case startMachine c of
+                              Left machineErr -> putStrLn $ "Machine error: " ++ machineErr
+                              Right (final, assocList, finalList) -> do
+                                print final
+                                prettyPrintRootType c
+                                prettyPrintAssocList assocList finalList
+                                let wireNames = [ (lab, wireName p) | (p, lab) <- assocList ++ finalList ]
+                                printAsciiCircuit wireNames final
         [] -> putStrLn "Error: You must specify a filename! (e.g., cabal run -- file.qqdc)"
 
 

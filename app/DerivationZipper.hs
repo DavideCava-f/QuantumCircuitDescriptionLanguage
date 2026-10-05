@@ -18,11 +18,6 @@ data Zipper = Zipper
 fromTree :: TypeDerivation -> Zipper
 fromTree t = Zipper t []
 
-toTree :: Zipper -> TypeDerivation      -- recover π from any token
-toTree z = case up z of
-  Nothing -> focus z
-  Just z' -> toTree z'
-
 -- Navigation (each O(1) apart from `down`, which is O(i)).
 up :: Zipper -> Maybe Zipper            -- to the conclusion of the rule below
 up (Zipper _ []) = Nothing
@@ -55,9 +50,6 @@ premOf z = let (p, _, _) = judgement z in p
 
 termOf :: Zipper -> TypedTerm
 termOf z = let (_, t, _) = judgement z in t
-
-typeOf :: Zipper -> Type
-typeOf z = let (_, _, t) = judgement z in t
 
 instance Eq Zipper where a == b = pathOf a == pathOf b
 instance Show Zipper where show = show . pathOf

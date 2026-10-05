@@ -66,7 +66,3 @@ equal  = symbol "="
 comma  = symbol ","             
 
 
-lexerTest :: Parser [String]
-lexerTest = sc *> many (rWord "let" <|> identifier <|> equal <|> rWord "in" <|> lambda <|> dot) <* eof
-
-

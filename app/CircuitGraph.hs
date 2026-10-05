@@ -1,43 +1,39 @@
 module CircuitGraph where
 
+import Control.Monad (foldM)
 import qualified Data.Map as Map
 import TypeTree (Type(..), Name, TypedTerm(..), TypedValue(..))
 import CreateDerivation (Concl, TypeDerivation, Tree(..))
 import DerivationZipper
+import Data.Maybe (listToMaybe)
 
 
 data Position = L | R deriving (Show, Eq)
 data Polarity = P | N deriving (Show, Eq)
 newtype Label = Lab Int deriving (Show, Eq, Ord)
 
--- Which formula of the judgement the position lies in: the conclusion A or
--- the type of the variable `name` in the context Gamma.
 data Formula = InConcl | InPrem Name deriving (Eq)
 
 instance Show Formula where
   show InConcl    = "Concl"
   show (InPrem x) = "Prem " ++ show x
 
--- An occurrence of a base type inside a formula: the context (C, B) + polarity.
 data Occ = Occ
   { occFormula :: Formula
   , occPath    :: [Position]
   , occPol     :: Polarity
   } deriving (Eq, Show)
 
--- sigma: a position in pi = a judgement (zipper) + an occurrence in it.
 data Pos = Pos
   { posNode :: Zipper
   , posOcc  :: Occ
   } deriving (Eq, Show)
 
--- G: partial function from labels to {0,1}.
 type Address = Map.Map Label Bool
 
 emptyAddress :: Address
 emptyAddress = Map.empty
 
--- a = (sigma, G) + the wire the token is travelling on.
 data Token = Token
   { tokPos   :: Pos
   , tokLabel :: Label
@@ -82,7 +78,7 @@ modifyAt g h (Branch c l e f) = case Map.lookup l g of
 
 data TransformedGate
   = SingleGate String Label Label     -- E.g. H, X, Y, Z, T, M, I with (LabelIn, LabelOut)
-  | FullCNOT Label Label Label Label  -- (In1, Out1, In2, Out2) in emission order
+  | FullCNOT Label Label Label Label  -- (InControl, OutControl, InTarget, OutTarget)
   deriving (Show, Eq)
 
 type FinalCircuit = [TransformedGate]
@@ -147,7 +143,7 @@ mkPos z f p = Pos z . Occ f p <$> polarityAt (judgement z) f p
 positionsOf :: Zipper -> [Occ]
 positionsOf z =
   let (prem, _, ty) = judgement z
-      inType f start t = [ Occ f p pol | (p, pol) <- walk start [] t ]
+      inType f start t = map (uncurry (Occ f)) (walk start [] t)
       walk pol acc t | isBase t = [(reverse acc, pol)]
       walk pol acc (TFun a b)   = walk (flipPol pol) (L : acc) a ++ walk pol (R : acc) b
       walk pol acc (TPair a b)  = walk pol (L : acc) a ++ walk pol (R : acc) b
@@ -157,6 +153,10 @@ positionsOf z =
 -- The token has reached a positive position of the conclusion of pi (PDATA)
 stopCond :: Pos -> Bool
 stopCond (Pos z occ) = isRoot z && occPol occ == P
+
+tokenAtNode :: Pos -> [Token] -> Int
+tokenAtNode pos = foldr (\t rec -> if (posNode . tokPos) t == posNode pos then 1+rec else rec) 0 
+
 
 -- True if the judgement is the axiom of a gate  |- c : T(c)
 isGateAxiom :: Zipper -> Bool
@@ -326,7 +326,7 @@ applyRule rule pos =
 makeCable :: String -> Zipper -> [Position] -> Label -> Label -> Cable
 makeCable "CNOT" axiom path lIn lOut = case path of
   (_ : side : _) -> HalfCNOT side (pathOf axiom) lIn lOut
-  _              -> error ("Posizione di ingresso CNOT inattesa: " ++ show path)
+  _              -> error ("Unexpected CNOT input position: " ++ show path)
 makeCable g _ _ lIn lOut = Wire g lIn lOut
 
 -- One machine step for a token
@@ -336,7 +336,7 @@ stepToken tok cfg = do
   rule <- ruleAt pos
   case rule of
     -- The token is on the input of a gate axiom: emits the gate
-    TGATE g [] | occPol occ == N -> do
+    TGATE g [] | occPol occ == N-> do
       pos' <- applyRule rule pos
       let n     = cfgNextLabel cfg + 1
           lOut  = Lab n
@@ -347,12 +347,6 @@ stepToken tok cfg = do
     _ -> do
       pos' <- applyRule rule pos
       return (tok { tokPos = pos' }, cfg)
-
--- Makes a token travel up to a final position
-runToken :: Token -> Config -> Either String (Token, Config)
-runToken tok cfg
-  | stopCond (tokPos tok) = Right (tok, cfg)
-  | otherwise             = stepToken tok cfg >>= uncurry runToken
 
 ------------------------------------------------------------------------------
 -- Initial configuration
@@ -403,12 +397,32 @@ setupInitialTokens cfg =
 runMachine :: Config -> Either String (FinalCircuit, TokenLabelList)
 runMachine cfg0 = do
   let cfg1 = setupInitialTokens cfg0
-      go (finished, c) t = do
-        (t', c') <- runToken t c
-        return (finished ++ [t'], c')
-  (finalToks, cfgEnd) <- foldl (\acc t -> acc >>= \s -> go s t) (Right ([], cfg1 { cfgTokens = [] })) (cfgTokens cfg1)
-  circuit <- maybe (Left "Indirizzo vuoto non valido nel circuito esteso") Right (at emptyAddress (cfgCircuit cfgEnd))
+
+      -- one step for one token; finished tokens are left alone
+      go toks (done, c) t
+        | stopCond (tokPos t) = Right (done ++ [t], c)
+        | Right (TGATE "CNOT" []) <- ruleAt (tokPos t)
+        , occPol (posOcc (tokPos t)) == N
+        , tokenAtNode (tokPos t) toks < 2 = Right (done ++ [t], c)
+        | otherwise = do
+            (t', c') <- stepToken t c
+            return (done ++ [t'], c')
+
+      -- one pass over all the tokens, then repeat unless the condition holds
+      loop toks c
+        | all (stopCond . tokPos) toks = Right (toks, c)
+        | otherwise = do
+            (toks', c') <- foldM (go toks) ([], c) toks
+            if map tokPos toks' == map tokPos toks
+              then Left ("Deadlock: tokens waiting at " ++ show 
+              [showPos (tokPos t) | t <- toks', not(stopCond(tokPos t))])
+              else loop toks' c'
+
+  (finalToks, cfgEnd) <- loop (cfgTokens cfg1) cfg1 { cfgTokens = [] }
+  circuit <- maybe (Left "Invalid empty address in the extended circuit")
+                    Right (at emptyAddress (cfgCircuit cfgEnd))
   return (buildFinalCircuit circuit, [ (tokPos t, tokLabel t) | t <- finalToks ])
+
 
 startMachine :: TypeDerivation -> Either String (FinalCircuit, TokenLabelList, TokenLabelList)
 startMachine derivation = do
@@ -434,7 +448,11 @@ buildFinalCircuit [] = []
 buildFinalCircuit (c : rest) = case c of
   Wire g lIn lOut -> SingleGate g lIn lOut : buildFinalCircuit rest
   HalfCNOT side ref lIn1 lOut1 -> case findAndRemoveCNOT side ref rest of
-    Just (lIn2, lOut2, remaining) -> FullCNOT lIn1 lOut1 lIn2 lOut2 : buildFinalCircuit remaining
+    Just (lIn2, lOut2, remaining) ->
+      let gate = case side of
+            L -> FullCNOT lIn1 lOut1 lIn2 lOut2   -- this half is the control
+            R -> FullCNOT lIn2 lOut2 lIn1 lOut1   -- this half is the target
+      in gate : buildFinalCircuit remaining
     Nothing -> error ("Errore: CNOT DEVE avere la sua parte L o R: " ++ show ref)
 
 ------------------------------------------------------------------------------

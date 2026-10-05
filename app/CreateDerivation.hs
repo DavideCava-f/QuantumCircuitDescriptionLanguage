@@ -2,7 +2,7 @@ module CreateDerivation where
 
 import qualified Data.Set as Set
 import qualified Data.Map as Map
-import TypeTree (Type(..),Term(..),TypedTerm(..),Value(..),TypedValue(..))
+import TypeTree (Type(..),TypedTerm(..),TypedValue(..))
 import Data.List (intercalate)
 
 type Prem = Map.Map String Type
@@ -22,11 +22,9 @@ startDerivation prem t =
     in
         cleanDerivationTree tree
 
-
-
 buildDerivation :: Prem -> TypedTerm -> TypeDerivation
 buildDerivation prem term = case term of
-  -- TV case: Value derivation
+  -- TV case: derivation of a value
   TV innerTerm t ->  buildDerivationV prem innerTerm t
 
   TNew n varId t ->
@@ -35,7 +33,7 @@ buildDerivation prem term = case term of
       , subForest = []
       }
 
-  -- TGate case: Recursively resolves the premises for each argument, and also adds the gate type
+  -- TGate Case: Recursively resolves the premises for each argument, in addition to adding the gate type.
   TGate g args t -> 
     let 
 
@@ -53,32 +51,32 @@ buildDerivation prem term = case term of
          }
   TLet x xType val body t -> 
     let 
-        -- 1. Derivation of the value bound by the let (in the current context)
+        -- 1. Derivation of the value assigned to the let (in the current context)
      valTree = buildDerivation prem val
         
         -- 2. Extension of the context with the new variable x
      extPrem = Map.insert x xType prem
         
-        -- 3. Derivation of the let body (in the extended context)
+        -- 3. Derivation of the let-body (in the extended context)
      bodyTree = buildDerivation extPrem body
         
     in Node 
         { rootLabel = (prem, TLet x xType val body t, t)
-        , subForest = [valTree, bodyTree] -- The two premise branches
+        , subForest = [valTree, bodyTree] -- The two branches of the premises
         }
   TDecomp x y pair body t -> 
       let 
-        -- Derivation of the premise to destructure 
+        -- Premise derivation to be deconstructed 
         pairTree = buildDerivation prem pair
         
-       -- Extraction of the types of the single variables 
+       -- Extraction of individual variable types
         (xType, yType) = case typeOf pair of
                            TPair t1 t2 -> (t1, t2)
         
-      -- Context update 
+      -- Context update
         extPrem = Map.insert x xType (Map.insert y yType prem)
         
-        -- Derivation of the body
+        -- Body derivation
         bodyTree = buildDerivation extPrem body
         
       in Node 
@@ -107,9 +105,9 @@ buildDerivation prem term = case term of
         
         
 
-        -- 1. Derivation of then
+        -- 1. Derivation of the then branch
      branch1Der = buildDerivation prem branch1
-        -- 1. Derivation of else
+        -- 1. Derivation of the else branch
      branch2Der = buildDerivation prem branch2
         
     in Node 
@@ -118,7 +116,7 @@ buildDerivation prem term = case term of
         }
 buildDerivationV :: Prem -> TypedValue -> Type -> TypeDerivation
 buildDerivationV prem val t = case val of
--- TVar case: Leaf (no premise added)
+-- TVar case: leaf (no premise added)
   TVar y varType -> 
     Node 
       { rootLabel = (prem, TV (TVar y varType) t, t)
@@ -127,7 +125,7 @@ buildDerivationV prem val t = case val of
 
 
 
-  -- TLambda case: Extends the context (Prem) with the new variable 'y'
+  -- TLambda case: extends the context (Prem) with the new variable 'y'
   TLambda y argT body lamType -> 
     let extPrem  = Map.insert y argT prem
         bodyTree = buildDerivation extPrem body
@@ -169,10 +167,10 @@ cleanDerivationTree (Node (prem, term, typ) subs) =
       -- Find the variables used in the term
       usedVars     = freeVarsTerm term
       
-      -- Keep only the useful variables
+      -- Keep only the variables that are used
       filteredPrem = Map.restrictKeys prem usedVars
       
-      -- recursive call
+      -- Recursive call
       cleanedSubs  = map cleanDerivationTree subs
     in 
       -- Returns a new node with 'filteredPrem' in place of 'prem'
@@ -221,15 +219,15 @@ prettyPrintDerivation tree = go 0 tree
         indentStr ++ "|-- " ++ judgement ++ childrenStr
 
 
--- Prints directly to the screen
+-- Print directly to the screen
 printDerivation :: TypeDerivation -> IO ()
 printDerivation deriv = putStrLn (prettyPrintDerivation deriv)
 
 colorQbit :: String -> String
-colorQbit s = "\ESC[1;36m" ++ s ++ "\ESC[0m"   -- Bright Cyan
+colorQbit s = "\ESC[1;36m" ++ s ++ "\ESC[0m"   -- Cian
 
 colorTFun :: String -> String
-colorTFun s = "\ESC[1;35m" ++ s ++ "\ESC[0m"   -- Bright Magenta
+colorTFun s = "\ESC[1;35m" ++ s ++ "\ESC[0m"   -- Magenta 
 
 colorTPair :: String -> String
 colorTPair s = "\ESC[1;33m" ++ s ++ "\ESC[0m"
@@ -241,12 +239,11 @@ showTypePretty TBit        = colorQbit "bit"
 showTypePretty (TFun t1 t2) = colorTFun "TFUN" ++ " (" ++ showTypePretty t1 ++ " -> " ++ showTypePretty t2 ++ ")"
 showTypePretty (TPair t1 t2)= colorTPair "TPAIR" ++ " (" ++ showTypePretty t1 ++ ", " ++ showTypePretty t2 ++ ")"
 showTypePretty t            = show t -- Fallback for other unspecified types
-
 showTermPretty :: TypedTerm -> String
 showTermPretty term = case term of
   TV val _                   -> showValPretty val
   TGate g args _             -> g ++ "(" ++ intercalate ", " (map showTermPretty args) ++ ")"
-  TNew n varId _             -> varId
+  TNew _ varId _             -> varId
   TApp f arg _               -> "(" ++ showTermPretty f ++ " " ++ showTermPretty arg ++ ")"
   TLet x _ val body _        -> "let " ++ x ++ " = " ++ showTermPretty val ++ " in " ++ showTermPretty body
   TDecomp x y pair body _    -> "let (" ++ x ++ ", " ++ y ++ ") = " ++ showTermPretty pair ++ " in " ++ showTermPretty body

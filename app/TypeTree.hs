@@ -40,9 +40,8 @@ data TypedTerm
   deriving (Show)
 
 type Context = [(Name, Type)]
-type Sequent = (Context, TypedTerm)
 
-annotate :: Context -> Term -> Either String Sequent
+annotate :: Context -> Term -> Either String (Context, TypedTerm)
 annotate ctx term = do
     (ctx',tt, _) <- annotateN 0 ctx term
     return (ctx',tt)

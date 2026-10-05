@@ -1,0 +1,104 @@
+-- GHCi script to inspect the intermediate stages of a compilation.
+--
+-- Run it from the project root in one of two ways:
+--
+--   cabal repl -v0 QuantumCircuitDescriptionLanguage < inspect.ghci
+--
+--   cabal repl QuantumCircuitDescriptionLanguage
+--   ghci> :script inspect.ghci
+--   ghci> ...keep exploring: ctx, ast, typed, c, root are all in scope
+--
+-- Change `file` below to inspect another program, and uncomment the sections
+-- you want to see.
+
+import DerivationZipper
+import Control.Monad (foldM)
+import qualified Text.Megaparsec as MP
+import qualified Data.Map as Map
+
+let file = "testFig7Paper.qqdc"
+
+-- Stage 1: parse
+src <- readFile file
+let Right (ctx, ast) = MP.runParser mainParser "" src
+putStrLn ("FILE: " ++ show src)
+
+-- Stage 2: type
+let Right (_, typed) = annotate ctx ast
+
+-- Stage 3: derivation
+let c = startDerivation (Map.fromList ctx) typed
+let root = fromTree c
+
+-- Stage 4: initial positions
+:{
+let (cfg, assoc) = addTokens (findInitials root) emptyConfig
+    cfg1 = setupInitialTokens cfg
+    go (finished, c) t = case runToken t c of
+        Left err -> Left err
+        Right (t',c') -> Right (finished ++ [t'], c')
+:}
+foldM go ([], cfg1 { cfgTokens = [] }) (cfgTokens cfg1)
+
+------------------------------------------------------------------------------
+-- Optional sections. Remove the leading `-- ` to enable one.
+------------------------------------------------------------------------------
+
+-- Untyped and typed syntax trees
+-- print ast
+-- print typed
+
+-- The derivation as a proof tree
+-- printDerivation c
+
+-- Every node of the derivation with all its positions
+-- :{
+-- mapM_ (\z -> do
+--     putStrLn ("NODE " ++ show (pathOf z) ++ "  " ++ showTermPretty (termOf z)
+--               ++ " : " ++ show (DerivationZipper.typeOf z))
+--     mapM_ (\o -> putStrLn ("    " ++ show o)) (positionsOf z))
+--   (allNodes root)
+-- :}
+
+-- Tokens after the initial identity gates
+-- let (cfg0, _) = addTokens (findInitials root) emptyConfig
+-- let cfg1 = setupInitialTokens cfg0
+-- prettyPrintTokens "Tokens after identity" (cfgTokens cfg1)
+
+-- Step-by-step trace, pass by pass, with the same waiting rule as runMachine
+:{
+let waits toks t = case ruleAt (tokPos t) of
+        Right (TGATE "CNOT" []) -> occPol (posOcc (tokPos t)) == N && tokenAtNode (tokPos t) toks < 2
+        _                       -> False
+    stepIO toks (done, cfg) t
+      | stopCond (tokPos t) = return (done ++ [t], cfg)
+      | waits toks t = putStrLn ("  WAIT  " ++ showPos (tokPos t) ++ " " ++ show (tokLabel t)) >> return (done ++ [t], cfg)
+      | otherwise = case stepToken t cfg of
+          Left err -> putStrLn ("  ERROR " ++ err) >> return (done ++ [t], cfg)
+          Right (t', cfg') -> do
+            putStrLn ("  " ++ showPos (tokPos t) ++ " " ++ show (tokLabel t)
+                      ++ "  -->  " ++ showPos (tokPos t') ++ " " ++ show (tokLabel t'))
+            return (done ++ [t'], cfg')
+    passes n toks cfg
+      | all (stopCond . tokPos) toks = return cfg
+      | otherwise = do
+          putStrLn ("---- pass " ++ show (n :: Int))
+          (toks', cfg') <- foldM (stepIO toks) ([], cfg) toks
+          if map tokPos toks' == map tokPos toks
+            then putStrLn "  DEADLOCK" >> return cfg'
+            else passes (n + 1) toks' cfg'
+:}
+cfgEnd <- passes 1 (cfgTokens cfg1) cfg1 { cfgTokens = [] }
+-- print (cfgCircuit cfgEnd)
+
+
+-- Final result, as printed by the program
+:{
+case (startMachine c) of
+    Left err -> putStrLn ("ERROR: " ++ err)
+    Right (final, assocList, finalList) -> do
+        let wireNames = [ (lab, wireName p) | (p, lab) <- assocList ++ finalList ]
+        printAsciiCircuit wireNames final
+:}
+-- print final
+-- prettyPrintAssocList assocList finalList
