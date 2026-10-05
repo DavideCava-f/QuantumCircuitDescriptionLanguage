@@ -20,11 +20,11 @@ Usage
 
 Run the main script on your dataset:
 
-cabal run QuantumCircuitDescriptionLanguage -- the-test-preffered.qqdc
+cabal run QuantumCircuitDescriptionLanguage -- examples/the-test-preffered.qqdc
 
 Example Output
 
-cabal run QuantumCircuitDescriptionLanguage -- testFig7Paper.qqdc 
+cabal run QuantumCircuitDescriptionLanguage -- examples/testFig7Paper.qqdc 
 
 x Lab 1 -------o------- [L] Lab 6
                |       

@@ -199,7 +199,7 @@ main = do
                                 prettyPrintAssocList assocList finalList
                                 let wireNames = [ (lab, wireName p) | (p, lab) <- assocList ++ finalList ]
                                 printAsciiCircuit wireNames final
-        [] -> putStrLn "Error: You must specify a filename! (e.g., cabal run -- file.qqdc)"
+        [] -> putStrLn "Error: You must specify a filename! (e.g., cabal run -- examples/file.qqdc)"
 
 
 -- Printing Root Type

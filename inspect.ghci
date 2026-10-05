@@ -16,7 +16,7 @@ import Control.Monad (foldM)
 import qualified Text.Megaparsec as MP
 import qualified Data.Map as Map
 
-let file = "testFig7Paper.qqdc"
+let file = "examples/testFig7Paper.qqdc"
 
 -- Stage 1: parse
 src <- readFile file
@@ -31,14 +31,8 @@ let c = startDerivation (Map.fromList ctx) typed
 let root = fromTree c
 
 -- Stage 4: initial positions
-:{
 let (cfg, assoc) = addTokens (findInitials root) emptyConfig
-    cfg1 = setupInitialTokens cfg
-    go (finished, c) t = case runToken t c of
-        Left err -> Left err
-        Right (t',c') -> Right (finished ++ [t'], c')
-:}
-foldM go ([], cfg1 { cfgTokens = [] }) (cfgTokens cfg1)
+let cfg1 = setupInitialTokens cfg
 
 ------------------------------------------------------------------------------
 -- Optional sections. Remove the leading `-- ` to enable one.

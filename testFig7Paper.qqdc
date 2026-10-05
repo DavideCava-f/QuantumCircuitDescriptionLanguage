@@ -1,1 +1,0 @@
-x: qbit, y: qbit |- CNOT(x,H(y))
