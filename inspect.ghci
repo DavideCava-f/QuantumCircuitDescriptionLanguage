@@ -13,6 +13,7 @@
 
 import DerivationZipper
 import Control.Monad (foldM)
+import Data.Maybe (isJust)
 import qualified Text.Megaparsec as MP
 import qualified Data.Map as Map
 
@@ -59,28 +60,35 @@ let cfg1 = setupInitialTokens cfg
 -- let cfg1 = setupInitialTokens cfg0
 -- prettyPrintTokens "Tokens after identity" (cfgTokens cfg1)
 
--- Step-by-step trace, pass by pass, with the same waiting rule as runMachine
+-- Step-by-step trace, pass by pass, with the same rules as runMachine:
+-- every free token moves one step, then the ready CNOTs fire
 :{
-let waits toks t = case ruleAt (tokPos t) of
-        Right (TGATE "CNOT" []) -> occPol (posOcc (tokPos t)) == N && tokenAtNode (tokPos t) toks < 2
-        _                       -> False
-    stepIO toks (done, cfg) t
+let stepIO (done, cfg) t
       | stopCond (tokPos t) = return (done ++ [t], cfg)
-      | waits toks t = putStrLn ("  WAIT  " ++ showPos (tokPos t) ++ " " ++ show (tokLabel t)) >> return (done ++ [t], cfg)
+      | isJust (inCNOT t) = putStrLn ("  WAIT  " ++ showPos (tokPos t) ++ " " ++ show (tokLabel t)) >> return (done ++ [t], cfg)
       | otherwise = case stepToken t cfg of
           Left err -> putStrLn ("  ERROR " ++ err) >> return (done ++ [t], cfg)
           Right (t', cfg') -> do
             putStrLn ("  " ++ showPos (tokPos t) ++ " " ++ show (tokLabel t)
                       ++ "  -->  " ++ showPos (tokPos t') ++ " " ++ show (tokLabel t'))
             return (done ++ [t'], cfg')
+    fireIO toks cfg = case readyCNOT toks of
+      Nothing -> return (toks, cfg)
+      Just (i, j) -> case fireCNOT (toks !! i) (toks !! j) cfg of
+        Left err -> putStrLn ("  ERROR " ++ err) >> return (toks, cfg)
+        Right (ctl', tgt', cfg') -> do
+          putStrLn ("  FIRE CNOT  " ++ show (tokLabel (toks !! i)) ++ " " ++ show (tokLabel (toks !! j))
+                    ++ "  -->  " ++ show (tokLabel ctl') ++ " " ++ show (tokLabel tgt'))
+          fireIO [ if k == i then ctl' else if k == j then tgt' else t | (k, t) <- zip [0 ..] toks ] cfg'
     passes n toks cfg
       | all (stopCond . tokPos) toks = return cfg
       | otherwise = do
           putStrLn ("---- pass " ++ show (n :: Int))
-          (toks', cfg') <- foldM (stepIO toks) ([], cfg) toks
-          if map tokPos toks' == map tokPos toks
-            then putStrLn "  DEADLOCK" >> return cfg'
-            else passes (n + 1) toks' cfg'
+          (toks1, cfg1') <- foldM stepIO ([], cfg) toks
+          (toks2, cfg2) <- fireIO toks1 cfg1'
+          if map tokPos toks2 == map tokPos toks
+            then putStrLn "  DEADLOCK" >> return cfg2
+            else passes (n + 1) toks2 cfg2
 :}
 cfgEnd <- passes 1 (cfgTokens cfg1) cfg1 { cfgTokens = [] }
 -- print (cfgCircuit cfgEnd)

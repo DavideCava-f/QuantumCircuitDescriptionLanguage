@@ -1,25 +1,23 @@
 module DerivationZipper where
 
 import CreateDerivation (Tree(..), TypeDerivation, Concl, Prem)
-import TypeTree (TypedTerm, Type)
+import TypeTree (TypedTerm)
 
--- One layer of context: the parent's judgement and the siblings of the focus.
 data Crumb = Crumb
   { parentLabel :: Concl
-  , leftSibs    :: [TypeDerivation]   -- reversed: nearest sibling first
+  , leftSibs    :: [TypeDerivation]   
   , rightSibs   :: [TypeDerivation]
   }
 
 data Zipper = Zipper
   { focus  :: TypeDerivation
-  , crumbs :: [Crumb]                 -- innermost first; [] at the root
+  , crumbs :: [Crumb]                
   }
 
 fromTree :: TypeDerivation -> Zipper
 fromTree t = Zipper t []
 
--- Navigation (each O(1) apart from `down`, which is O(i)).
-up :: Zipper -> Maybe Zipper            -- to the conclusion of the rule below
+up :: Zipper -> Maybe Zipper            
 up (Zipper _ []) = Nothing
 up (Zipper t (Crumb lbl ls rs : cs)) = Just (Zipper (Node lbl (reverse ls ++ t : rs)) cs)
 
@@ -31,14 +29,14 @@ down i (Zipper (Node lbl kids) cs) = case splitAt i kids of
 sibling :: Int -> Zipper -> Maybe Zipper
 sibling i z = up z >>= down i
 
-childIndex :: Zipper -> Maybe Int       -- replaces `last pi`
+childIndex :: Zipper -> Maybe Int       
 childIndex (Zipper _ [])      = Nothing
 childIndex (Zipper _ (c : _)) = Just (length (leftSibs c))
 
-isRoot :: Zipper -> Bool                -- replaces `null pi`
+isRoot :: Zipper -> Bool                
 isRoot = null . crumbs
 
-pathOf :: Zipper -> [Int]               -- the old [PosInPi], for Eq/Show only
+pathOf :: Zipper -> [Int]               
 pathOf = reverse . map (length . leftSibs) . crumbs
 
 -- Reading the focused judgement.

@@ -215,14 +215,14 @@ prettyPrintRootType :: TypeDerivation -> IO ()
 prettyPrintRootType derivation = putStrLn (formatRootType derivation)
 
 
-gateInputs, gateOutputs :: TransformedGate -> [Label]
-gateInputs  (SingleGate _ i _)     = [i]
-gateInputs  (FullCNOT i1 _ i2 _)   = [i1, i2]
-gateOutputs (SingleGate _ _ o)     = [o]
-gateOutputs (FullCNOT _ o1 _ o2)   = [o1, o2]
+gateInputs, gateOutputs :: Gate -> [Label]
+gateInputs  (Wire _ i _)     = [i]
+gateInputs  (CNOT i1 _ i2 _)   = [i1, i2]
+gateOutputs (Wire _ _ o)     = [o]
+gateOutputs (CNOT _ o1 _ o2)   = [o1, o2]
 
-isIdentityGate :: TransformedGate -> Bool
-isIdentityGate (SingleGate "I" _ _) = True
+isIdentityGate :: Gate -> Bool
+isIdentityGate (Wire "I" _ _) = True
 isIdentityGate _                    = False
 
 -- Readable name of the wire starting/ending at a position: the context
@@ -234,7 +234,7 @@ wireName (Pos z (Occ f path _)) = case (f, termOf z) of
   (InConcl, _)          -> show path
 
 -- Arguments: names associated with the initial/final labels (may be empty) and the circuit.
-asciiCircuit :: [(Label, String)] -> FinalCircuit -> String
+asciiCircuit :: [(Label, String)] -> Circuit -> String
 asciiCircuit names circuit
   | null circuit = "(empty circuit)"
   | otherwise    = unlines (concat (zipWith rowLines [0 ..] rows))
@@ -258,8 +258,8 @@ asciiCircuit names circuit
     nCols = 2 + maximum ((-1) : [ c | (gi, c) <- Map.toList cols, not (isIdentityGate (gateAt gi)) ])
 
     -- Wire: (initial label, gates crossed, final label)
-    outFor (SingleGate _ _ o) _ = o
-    outFor (FullCNOT i1 o1 _ o2) l = if l == i1 then o1 else o2
+    outFor (Wire _ _ o) _ = o
+    outFor (CNOT i1 o1 _ o2) l = if l == i1 then o1 else o2
     chain l = case Map.lookup l consumer of
       Nothing -> ([], l)
       Just gi -> let (gs, end) = chain (outFor (gateAt gi) l) in (gi : gs, end)
@@ -272,10 +272,10 @@ asciiCircuit names circuit
     rowIn lab = Map.findWithDefault (-1) lab rowOfLabel
 
     cnotSpans = [ (cols Map.! gi, min r1 r2, max r1 r2)
-                | (gi, FullCNOT i1 _ i2 _) <- indexed, let r1 = rowIn i1, let r2 = rowIn i2 ]
+                | (gi, CNOT i1 _ i2 _) <- indexed, let r1 = rowIn i1, let r2 = rowIn i2 ]
 
     -- Column where the wire becomes classical (after an M), if any
-    measureCol gs = case [ cols Map.! gi | gi <- gs, SingleGate "M" _ _ <- [gateAt gi] ] of
+    measureCol gs = case [ cols Map.! gi | gi <- gs, Wire "M" _ _ <- [gateAt gi] ] of
       []      -> Nothing
       (c : _) -> Just c
 
@@ -289,8 +289,8 @@ asciiCircuit names circuit
           plain = replicate 5 wire
           here = [ gateAt gi | gi <- gs, cols Map.! gi == c, not (isIdentityGate (gateAt gi)) ]
       in case here of
-           (SingleGate g _ _ : _)   -> [wire, wire] ++ take 1 g ++ [wire, wire]
-           (FullCNOT i1 _ _ _ : _)  -> [wire, wire] ++ (if rowIn i1 == r then "o" else "X") ++ [wire, wire]
+           (Wire g _ _ : _)   -> [wire, wire] ++ take 1 g ++ [wire, wire]
+           (CNOT i1 _ _ _ : _)  -> [wire, wire] ++ (if rowIn i1 == r then "o" else "X") ++ [wire, wire]
            []                       -> plain
 
     gapCell r c = if any (\(cc, lo, hi) -> cc == c && lo <= r && r < hi) cnotSpans then "  |  " else "     "
@@ -302,5 +302,5 @@ asciiCircuit names circuit
           gap   = replicate (leftWidth + 1) ' ' ++ concatMap (gapCell r) [0 .. nCols - 1]
       in if r < length rows - 1 then [line, gap] else [line]
 
-printAsciiCircuit :: [(Label, String)] -> FinalCircuit -> IO ()
+printAsciiCircuit :: [(Label, String)] -> Circuit -> IO ()
 printAsciiCircuit names circuit = putStr (asciiCircuit names circuit)

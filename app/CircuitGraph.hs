@@ -5,7 +5,7 @@ import qualified Data.Map as Map
 import TypeTree (Type(..), Name, TypedTerm(..), TypedValue(..))
 import CreateDerivation (Concl, TypeDerivation, Tree(..))
 import DerivationZipper
-import Data.Maybe (listToMaybe)
+import Data.Maybe (listToMaybe, isJust)
 
 
 data Position = L | R deriving (Show, Eq)
@@ -42,19 +42,13 @@ data Token = Token
 
 type TokenLabelList = [(Pos, Label)]
 
--- Circuit: sequence of gates c^l_r. A CNOT is emitted in halves (one wire per
--- token) and the two halves are joined in buildFinalCircuit: they are the same
--- gate if they have the same gate axiom (pathOf) and opposite L/R sides.
-type GateRef = [Int]
-
-data Cable
-  = Wire String Label Label                 -- I, H, X, Y, Z, T, M  (labelIn, labelOut)
-  | HalfCNOT Position GateRef Label Label   -- side (L = control, R = target), axiom, in, out
+data Gate
+  = Wire String Label Label           -- I, H, X, Y, Z, T, M   (labelIn, labelOut)
+  | CNOT Label Label Label Label      -- inControl, outControl, inTarget, outTarget
   deriving (Show, Eq)
 
-type Circuit = [Cable]
+type Circuit = [Gate]
 
--- E ::= C | C -l-> (E, F)
 data ExtCircuit
   = Leaf Circuit
   | Branch Circuit Label ExtCircuit ExtCircuit
@@ -68,7 +62,6 @@ at g (Branch _ l e f) = case Map.lookup l g of
   Just False -> at (Map.delete l g) f
   Nothing    -> Nothing
 
--- E@G[C]: applies a modification to the circuit at address G
 modifyAt :: Address -> (Circuit -> Circuit) -> ExtCircuit -> ExtCircuit
 modifyAt _ h (Leaf c) = Leaf (h c)
 modifyAt g h (Branch c l e f) = case Map.lookup l g of
@@ -76,24 +69,16 @@ modifyAt g h (Branch c l e f) = case Map.lookup l g of
   Just False -> Branch c l e (modifyAt (Map.delete l g) h f)
   Nothing    -> Branch c l e f
 
-data TransformedGate
-  = SingleGate String Label Label     -- E.g. H, X, Y, Z, T, M, I with (LabelIn, LabelOut)
-  | FullCNOT Label Label Label Label  -- (InControl, OutControl, InTarget, OutTarget)
-  deriving (Show, Eq)
-
-type FinalCircuit = [TransformedGate]
-
 -- Configuration C = (pi, M, E)
 data Config = Config
-  { cfgTokens    :: [Token]      -- M
-  , cfgCircuit   :: ExtCircuit   -- E
-  , cfgNextLabel :: Int          -- last label used (generator of lab(-))
+  { cfgTokens    :: [Token]      
+  , cfgCircuit   :: ExtCircuit   
+  , cfgNextLabel :: Int          
   } deriving (Show)
 
 emptyConfig :: Config
 emptyConfig = Config [] (Leaf []) 0
 
--- Typing rule the token is crossing
 data Rule
   = TLAMBDA Name
   | TGATE String [TypedTerm]
@@ -105,9 +90,9 @@ data Rule
   | TIF
   deriving (Show)
 
-------------------------------------------------------------------------------
--- Positions: construction and polarity
-------------------------------------------------------------------------------
+
+----- Utils -----
+
 
 flipPol :: Polarity -> Polarity
 flipPol P = N
@@ -118,10 +103,6 @@ isBase TQbit = True
 isBase TBit  = True
 isBase _     = False
 
--- Polarity of the occurrence `path` in the formula `f` of the judgement: start from
--- P for the conclusion and from N for the premises, flip on the left of an
--- arrow, do not flip under the tensor. Nothing if the path does not
--- correspond to a base type of the formula.
 polarityAt :: Concl -> Formula -> [Position] -> Maybe Polarity
 polarityAt (prem, _, ty) f path = case f of
     InConcl  -> walk P ty path
@@ -134,12 +115,9 @@ polarityAt (prem, _, ty) f path = case f of
     walk pol (TPair _ b)  (R : ps) = walk pol b ps
     walk _   _            _        = Nothing
 
--- Builds the target position of a rule (instead of searching for it in a list).
 mkPos :: Zipper -> Formula -> [Position] -> Maybe Pos
 mkPos z f p = Pos z . Occ f p <$> polarityAt (judgement z) f p
 
--- All the positions of a judgement (premises first, in name order,
--- then the conclusion; this is the order of the old processJudgment).
 positionsOf :: Zipper -> [Occ]
 positionsOf z =
   let (prem, _, ty) = judgement z
@@ -150,27 +128,25 @@ positionsOf z =
       walk _   _   _            = []
   in concat [ inType (InPrem x) N t | (x, t) <- Map.toList prem ] ++ inType InConcl P ty
 
--- The token has reached a positive position of the conclusion of pi (PDATA)
 stopCond :: Pos -> Bool
 stopCond (Pos z occ) = isRoot z && occPol occ == P
 
-tokenAtNode :: Pos -> [Token] -> Int
-tokenAtNode pos = foldr (\t rec -> if (posNode . tokPos) t == posNode pos then 1+rec else rec) 0 
-
-
--- True if the judgement is the axiom of a gate  |- c : T(c)
 isGateAxiom :: Zipper -> Bool
 isGateAxiom z = case termOf z of
   TGate _ [] _ -> True
   _            -> False
 
-------------------------------------------------------------------------------
--- Rule inference
---
--- A negative token goes up towards the premises: the rule is that of the judgement
--- it lies in. A positive token goes down through the rule below: the
--- rule is that of the parent judgement.
-------------------------------------------------------------------------------
+-- if the token is waiting on an input of a CNOT axiom: path [L, side], with L = input of the arrow and side = control (L) / target (R)
+inCNOT :: Token -> Maybe (Zipper, Position)
+inCNOT tok = case tokPos tok of
+  Pos z (Occ InConcl [L, side] N) | isCNOT z -> Just (z, side)
+  _                                          -> Nothing
+  where
+    isCNOT z = case termOf z of
+      TGate "CNOT" [] _ -> True
+      _                 -> False
+
+----- Application of rules, following the paper -----
 
 ruleAt :: Pos -> Either String Rule
 ruleAt (Pos z occ) = do
@@ -187,61 +163,42 @@ ruleAt (Pos z occ) = do
     TIf _ _ _ _            -> Right TIF
     TNew _ _ _             -> Left ("Termine non riconosciuto (new) in " ++ showPos (Pos z occ))
 
-------------------------------------------------------------------------------
--- Structural rules (Fig. 6a of the paper)
---
--- Each clause is a navigation in the zipper (up / down i / sibling j)
--- followed by mkPos, which builds the target occurrence and recomputes its
--- polarity. `z` is always the judgement the token lies in.
-------------------------------------------------------------------------------
 
--- Premise that owns the variable y among the children k
 ownerOf :: Name -> [Int] -> Zipper -> Maybe Zipper
 ownerOf _ [] _ = Nothing
 ownerOf y (k : ks) z = case down k z of
   Just zk | Map.member y (premOf zk) -> Just zk
   _                                  -> ownerOf y ks z
 
--- Gate node: children [gate axiom (0), argument (1)]
 applyGate :: Pos -> Maybe Pos
 applyGate (Pos z (Occ f path pol)) = case (f, pol) of
   (InPrem y, N) -> down 1 z >>= \z' -> mkPos z' (InPrem y) path
   (InPrem y, P) -> up z     >>= \z' -> mkPos z' (InPrem y) path
   (InConcl, P) -> case childIndex z of
-      -- Leaving the axiom's output (R : p): go to the conclusion of the gate node
       Just 0 -> up z >>= \z' -> mkPos z' InConcl (drop 1 path)
-      -- Leaving the argument's conclusion: enter the axiom's input (L : p)
       _      -> sibling 0 z >>= \z' -> mkPos z' InConcl (L : path)
   (InConcl, N)
-      -- Circuit rule: from the input to the output of the axiom
+      -- Circuit rule:
       | isGateAxiom z -> mkPos z InConcl (R : drop 1 path)
-      -- Negative position in the gate's output: go down into the axiom
       | otherwise     -> down 0 z >>= \z' -> mkPos z' InConcl (R : path)
 
--- Application node: children [function (0), argument (1)]
 applyApp :: Pos -> Maybe Pos
 applyApp (Pos z (Occ f path pol)) = case (f, pol) of
   (InPrem y, N) -> ownerOf y [0, 1] z >>= \z' -> mkPos z' (InPrem y) path
   (InPrem y, P) -> up z >>= \z' -> mkPos z' (InPrem y) path
-  -- B- of the conclusion  ->  B- inside A -o B of the function
   (InConcl, N)  -> down 0 z >>= \z' -> mkPos z' InConcl (R : path)
   (InConcl, P)  -> case (childIndex z, path) of
-      -- leaving the function on the output B+  ->  B+ of the conclusion
       (Just 0, R : ps) -> up z >>= \z' -> mkPos z' InConcl ps
-      -- leaving the function on the input A-  ->  A of the argument's conclusion
       (Just 0, L : ps) -> sibling 1 z >>= \z' -> mkPos z' InConcl ps
       (Just 0, [])     -> Nothing
-      -- leaving the argument A+  ->  A- inside A -o B of the function
       _                -> sibling 0 z >>= \z' -> mkPos z' InConcl (L : path)
 
--- Axiom x : A |- x : A: the token crosses the axiom
 applyVar :: Name -> Pos -> Maybe Pos
 applyVar x (Pos z (Occ f path pol)) = case (f, pol) of
   (InConcl, N)  -> mkPos z (InPrem x) path
   (InPrem _, N) -> mkPos z InConcl path
   _             -> Nothing
 
--- Pair node: children [t1 (0), t2 (1)]
 applyTensor :: Pos -> Maybe Pos
 applyTensor (Pos z (Occ f path pol)) = case (f, pol) of
   (InPrem y, N) -> ownerOf y [0, 1] z >>= \z' -> mkPos z' (InPrem y) path
@@ -255,7 +212,6 @@ applyTensor (Pos z (Occ f path pol)) = case (f, pol) of
       z' <- up z
       mkPos z' InConcl ((if k == 0 then L else R) : path)
 
--- Node let <x,y> = M in N: children [pair (0), body (1)]
 applyDecomp :: Name -> Name -> Pos -> Maybe Pos
 applyDecomp x y (Pos z (Occ f path pol)) = case (f, pol) of
   (InPrem v, N) -> ownerOf v [0, 1] z >>= \z' -> mkPos z' (InPrem v) path
@@ -265,42 +221,32 @@ applyDecomp x y (Pos z (Occ f path pol)) = case (f, pol) of
       | otherwise -> up z >>= \z' -> mkPos z' (InPrem v) path
   (InConcl, N)  -> down 1 z >>= \z' -> mkPos z' InConcl path
   (InConcl, P)  -> case (childIndex z, path) of
-      -- leaving the pair: left component -> x, right -> y in the body
       (Just 0, L : ps) -> sibling 1 z >>= \z' -> mkPos z' (InPrem x) ps
       (Just 0, R : ps) -> sibling 1 z >>= \z' -> mkPos z' (InPrem y) ps
       (Just 0, [])     -> Nothing
-      -- leaving the body -> conclusion of the let
       _                -> up z >>= \z' -> mkPos z' InConcl path
 
--- Node lambda x: children [body (0)]
 applyLambda :: Name -> Pos -> Maybe Pos
 applyLambda x (Pos z (Occ f path pol)) = case (f, pol) of
   (InPrem y, N) | y /= x -> down 0 z >>= \z' -> mkPos z' (InPrem y) path
   (InPrem y, P) | y /= x -> up z >>= \z' -> mkPos z' (InPrem y) path
-  -- entering from the conclusion A -o B: A goes to the premise x, B to the body's conclusion
   (InConcl, N) -> case path of
       L : ps -> down 0 z >>= \z' -> mkPos z' (InPrem x) ps
       R : ps -> down 0 z >>= \z' -> mkPos z' InConcl ps
       []     -> Nothing
-  -- leaving the body: the conclusion B goes right, the premise x goes left
   (InConcl, P)  -> up z >>= \z' -> mkPos z' InConcl (R : path)
   (InPrem _, P) -> up z >>= \z' -> mkPos z' InConcl (L : path)
   (InPrem _, N) -> Nothing
 
--- Node let x = M in N: children [value (0), body (1)]
 applyLet :: Name -> Pos -> Maybe Pos
 applyLet x (Pos z (Occ f path pol)) = case (f, pol) of
   (InPrem y, N) | y /= x -> ownerOf y [0, 1] z >>= \z' -> mkPos z' (InPrem y) path
   (InPrem y, P) | y /= x -> up z >>= \z' -> mkPos z' (InPrem y) path
-  -- x : A+ in the body  ->  A+ of the value's conclusion
   (InPrem _, P) -> sibling 0 z >>= \z' -> mkPos z' InConcl path
   (InPrem _, N) -> Nothing
   (InConcl, P)  -> case childIndex z of
-      -- A+ of the value  ->  x : A in the body
       Just 0 -> sibling 1 z >>= \z' -> mkPos z' (InPrem x) path
-      -- B+ of the body  ->  B+ of the let
       _      -> up z >>= \z' -> mkPos z' InConcl path
-  -- B- of the let  ->  B- of the body
   (InConcl, N)  -> down 1 z >>= \z' -> mkPos z' InConcl path
 
 applyRule :: Rule -> Pos -> Either String Pos
@@ -319,46 +265,68 @@ applyRule rule pos =
        (_, Just p)    -> Right p
        (_, Nothing)   -> Left ("Regola " ++ show rule ++ " non applicabile alla posizione " ++ showPos pos)
 
-------------------------------------------------------------------------------
--- Circuit rule (Fig. 6b) and token travel
-------------------------------------------------------------------------------
+----- Travel tokens -----
 
-makeCable :: String -> Zipper -> [Position] -> Label -> Label -> Cable
-makeCable "CNOT" axiom path lIn lOut = case path of
-  (_ : side : _) -> HalfCNOT side (pathOf axiom) lIn lOut
-  _              -> error ("Unexpected CNOT input position: " ++ show path)
-makeCable g _ _ lIn lOut = Wire g lIn lOut
-
--- One machine step for a token
 stepToken :: Token -> Config -> Either String (Token, Config)
 stepToken tok cfg = do
-  let pos@(Pos z occ) = tokPos tok
+  let pos@(Pos _ occ) = tokPos tok
   rule <- ruleAt pos
   case rule of
     -- The token is on the input of a gate axiom: emits the gate
-    TGATE g [] | occPol occ == N-> do
+    TGATE g [] | occPol occ == N -> do
+      case g of
+        "CNOT" -> Left ("A CNOT is fired by fireCNOT, not by stepToken: " ++ showPos pos)
+        _      -> Right ()
       pos' <- applyRule rule pos
-      let n     = cfgNextLabel cfg + 1
-          lOut  = Lab n
-          cable = makeCable g z (occPath occ) (tokLabel tok) lOut
+      let n    = cfgNextLabel cfg + 1
+          lOut = Lab n
       return ( tok { tokPos = pos', tokLabel = lOut }
-             , cfg { cfgCircuit = modifyAt (tokAddr tok) (++ [cable]) (cfgCircuit cfg)
+             , cfg { cfgCircuit = modifyAt (tokAddr tok) (++ [Wire g (tokLabel tok) lOut]) (cfgCircuit cfg)
                    , cfgNextLabel = n } )
     _ -> do
       pos' <- applyRule rule pos
       return (tok { tokPos = pos' }, cfg)
 
-------------------------------------------------------------------------------
--- Initial configuration
-------------------------------------------------------------------------------
+-- Circuit rule for CNOT
+fireCNOT :: Token -> Token -> Config -> Either String (Token, Token, Config)
+fireCNOT ctl tgt cfg = do
+  ctlPos <- applyRule (TGATE "CNOT" []) (tokPos ctl)
+  tgtPos <- applyRule (TGATE "CNOT" []) (tokPos tgt)
+  let n    = cfgNextLabel cfg
+      out1 = Lab (n + 1)
+      out2 = Lab (n + 2)
+      gate = CNOT (tokLabel ctl) out1 (tokLabel tgt) out2
+  return ( ctl { tokPos = ctlPos, tokLabel = out1 }
+         , tgt { tokPos = tgtPos, tokLabel = out2 }
+         , cfg { cfgCircuit = modifyAt (tokAddr ctl) (++ [gate]) (cfgCircuit cfg)
+               , cfgNextLabel = n + 2 } )
 
--- Pre-order visit of all the judgements of pi
+-- Indices (control, target) of the first CNOT with both inputs occupied
+readyCNOT :: [Token] -> Maybe (Int, Int)
+readyCNOT toks = listToMaybe
+  [ (i, j)
+  | (i, ctl) <- itoks, Just (z1, L) <- [inCNOT ctl]
+  , (j, tgt) <- itoks, Just (z2, R) <- [inCNOT tgt]
+  , z1 == z2, tokAddr ctl == tokAddr tgt ]
+  where itoks = zip [0 ..] toks
+
+
+-- Fires every ready CNOT, keeping the tokens in their places in the list
+fireAllCNOT :: [Token] -> Config -> Either String ([Token], Config)
+fireAllCNOT toks cfg = case readyCNOT toks of
+  Nothing     -> Right (toks, cfg)
+  Just (i, j) -> do
+    (ctl', tgt', cfg') <- fireCNOT (toks !! i) (toks !! j) cfg
+    let toks'  = take i toks  ++ [ctl'] ++ drop (i + 1) toks
+        toks'' = take j toks' ++ [tgt'] ++ drop (j + 1) toks'
+    fireAllCNOT toks'' cfg'
+
+
 allNodes :: Zipper -> [Zipper]
 allNodes z = z : concatMap allNodes [ zk | k <- [0 .. length (subForest (focus z)) - 1]
                                          , Just zk <- [down k z] ]
 
--- Initial positions: NDATA (negative positions of the conclusion of pi) and the
--- outputs of the `new` axioms, which play the role of the occurrences of * (ONES).
+-- Initial positions: NDATA (negative positions of the conclusion of pi) and the outputs of the `new` axioms
 findInitials :: Zipper -> [Pos]
 findInitials root =
   let ndata     = [ Pos root o | o <- positionsOf root, occPol o == N ]
@@ -374,7 +342,9 @@ addTokens poss cfg =
       assoc  = [ (tokPos t, tokLabel t) | t <- toks ]
   in (cfg { cfgTokens = cfgTokens cfg ++ toks, cfgNextLabel = start + length poss }, assoc)
 
--- Identity on every initial wire (the Id circuit of the initial configuration)
+----- Identity Application -----
+
+-- Identity on every initial wire 
 applyInitialIdentity :: Token -> Config -> (Token, Config)
 applyInitialIdentity tok cfg =
   let n    = cfgNextLabel cfg + 1
@@ -390,74 +360,45 @@ setupInitialTokens cfg =
                            ([], cfg) (cfgTokens cfg)
   in cfg' { cfgTokens = toks }
 
-------------------------------------------------------------------------------
--- Machine
-------------------------------------------------------------------------------
+----- Core Running Machine -----
 
-runMachine :: Config -> Either String (FinalCircuit, TokenLabelList)
+runMachine :: Config -> Either String (Circuit, TokenLabelList)
 runMachine cfg0 = do
   let cfg1 = setupInitialTokens cfg0
 
-      -- one step for one token; finished tokens are left alone
-      go toks (done, c) t
-        | stopCond (tokPos t) = Right (done ++ [t], c)
-        | Right (TGATE "CNOT" []) <- ruleAt (tokPos t)
-        , occPol (posOcc (tokPos t)) == N
-        , tokenAtNode (tokPos t) toks < 2 = Right (done ++ [t], c)
+      -- one step for one token finished tokens and tokens waiting at a CNOT are left alone
+      go (done, c) t
+        | stopCond (tokPos t) || isJust (inCNOT t) = Right (done ++ [t], c)
         | otherwise = do
             (t', c') <- stepToken t c
             return (done ++ [t'], c')
 
-      -- one pass over all the tokens, then repeat unless the condition holds
+      -- every free token moves one step, then the ready CNOTs fire and repeats until all tokens have finished
       loop toks c
         | all (stopCond . tokPos) toks = Right (toks, c)
         | otherwise = do
-            (toks', c') <- foldM (go toks) ([], c) toks
-            if map tokPos toks' == map tokPos toks
-              then Left ("Deadlock: tokens waiting at " ++ show 
-              [showPos (tokPos t) | t <- toks', not(stopCond(tokPos t))])
-              else loop toks' c'
+            (toks1, c1) <- foldM go ([], c) toks
+            (toks2, c2) <- fireAllCNOT toks1 c1
+            if map tokPos toks2 == map tokPos toks
+              then Left ("Deadlock: tokens waiting at " ++ show
+                         [ showPos (tokPos t) | t <- toks2, not (stopCond (tokPos t)) ])
+              else loop toks2 c2
 
   (finalToks, cfgEnd) <- loop (cfgTokens cfg1) cfg1 { cfgTokens = [] }
   circuit <- maybe (Left "Invalid empty address in the extended circuit")
                     Right (at emptyAddress (cfgCircuit cfgEnd))
-  return (buildFinalCircuit circuit, [ (tokPos t, tokLabel t) | t <- finalToks ])
+  return (circuit, [ (tokPos t, tokLabel t) | t <- finalToks ])
 
 
-startMachine :: TypeDerivation -> Either String (FinalCircuit, TokenLabelList, TokenLabelList)
+startMachine :: TypeDerivation -> Either String (Circuit, TokenLabelList, TokenLabelList)
 startMachine derivation = do
   let root             = fromTree derivation
       (cfg, assocList) = addTokens (findInitials root) emptyConfig
   (final, finalList) <- runMachine cfg
   return (final, assocList, finalList)
 
-------------------------------------------------------------------------------
--- Final circuit: joining the two halves of each CNOT
-------------------------------------------------------------------------------
 
-findAndRemoveCNOT :: Position -> GateRef -> Circuit -> Maybe (Label, Label, Circuit)
-findAndRemoveCNOT _ _ [] = Nothing
-findAndRemoveCNOT side ref (c : cs) = case c of
-  HalfCNOT side2 ref2 lIn lOut | ref2 == ref && side2 /= side -> Just (lIn, lOut, cs)
-  _ -> do
-    (lIn, lOut, rest) <- findAndRemoveCNOT side ref cs
-    return (lIn, lOut, c : rest)
-
-buildFinalCircuit :: Circuit -> FinalCircuit
-buildFinalCircuit [] = []
-buildFinalCircuit (c : rest) = case c of
-  Wire g lIn lOut -> SingleGate g lIn lOut : buildFinalCircuit rest
-  HalfCNOT side ref lIn1 lOut1 -> case findAndRemoveCNOT side ref rest of
-    Just (lIn2, lOut2, remaining) ->
-      let gate = case side of
-            L -> FullCNOT lIn1 lOut1 lIn2 lOut2   -- this half is the control
-            R -> FullCNOT lIn2 lOut2 lIn1 lOut1   -- this half is the target
-      in gate : buildFinalCircuit remaining
-    Nothing -> error ("Errore: CNOT DEVE avere la sua parte L o R: " ++ show ref)
-
-------------------------------------------------------------------------------
--- Pretty
-------------------------------------------------------------------------------
+----- Pretty -----
 
 showPos :: Pos -> String
 showPos (Pos z (Occ f path pol)) =
