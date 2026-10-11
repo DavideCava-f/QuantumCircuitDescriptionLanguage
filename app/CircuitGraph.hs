@@ -6,9 +6,11 @@ import TypeTree (Type(..), Name, TypedTerm(..), TypedValue(..))
 import CreateDerivation (Concl, TypeDerivation, Tree(..))
 import DerivationZipper
 import Data.Maybe (listToMaybe, isJust)
+import Data.List (elemIndex)
 
 
-data Position = L | R deriving (Show, Eq)
+-- Step of a path inside a type: L/R = left/right of an arrow, C i = component i of a tuple
+data Position = L | R | C Int deriving (Show, Eq)
 data Polarity = P | N deriving (Show, Eq)
 newtype Label = Lab Int deriving (Show, Eq, Ord)
 
@@ -43,8 +45,9 @@ data Token = Token
 type TokenLabelList = [(Pos, Label)]
 
 data Gate
-  = Wire String Label Label           -- I, H, X, Y, Z, T, M   (labelIn, labelOut)
-  | CNOT Label Label Label Label      -- inControl, outControl, inTarget, outTarget
+  = Wire String Label Label           -- one-qubit gate: name, labelIn, labelOut
+  | MultiGate String [Label] [Label]  -- n-qubit gate: name, inputs, outputs (same order,
+                                      -- the order of the arguments, e.g. controls first)
   deriving (Show, Eq)
 
 type Circuit = [Gate]
@@ -85,7 +88,7 @@ data Rule
   | TTENSOR
   | TVAR Name
   | TAPP
-  | TDECOMP Name Name
+  | TDECOMP [Name]
   | TLET Name
   | TIF
   deriving (Show)
@@ -111,8 +114,7 @@ polarityAt (prem, _, ty) f path = case f of
     walk pol t            []       = if isBase t then Just pol else Nothing
     walk pol (TFun a _)   (L : ps) = walk (flipPol pol) a ps
     walk pol (TFun _ b)   (R : ps) = walk pol b ps
-    walk pol (TPair a _)  (L : ps) = walk pol a ps
-    walk pol (TPair _ b)  (R : ps) = walk pol b ps
+    walk pol (TPair ts)   (C i : ps) | i >= 0 && i < length ts = walk pol (ts !! i) ps
     walk _   _            _        = Nothing
 
 mkPos :: Zipper -> Formula -> [Position] -> Maybe Pos
@@ -124,7 +126,7 @@ positionsOf z =
       inType f start t = map (uncurry (Occ f)) (walk start [] t)
       walk pol acc t | isBase t = [(reverse acc, pol)]
       walk pol acc (TFun a b)   = walk (flipPol pol) (L : acc) a ++ walk pol (R : acc) b
-      walk pol acc (TPair a b)  = walk pol (L : acc) a ++ walk pol (R : acc) b
+      walk pol acc (TPair ts)   = concat [ walk pol (C i : acc) t | (i, t) <- zip [0 ..] ts ]
       walk _   _   _            = []
   in concat [ inType (InPrem x) N t | (x, t) <- Map.toList prem ] ++ inType InConcl P ty
 
@@ -136,15 +138,22 @@ isGateAxiom z = case termOf z of
   TGate _ [] _ -> True
   _            -> False
 
--- if the token is waiting on an input of a CNOT axiom: path [L, side], with L = input of the arrow and side = control (L) / target (R)
-inCNOT :: Token -> Maybe (Zipper, Position)
-inCNOT tok = case tokPos tok of
-  Pos z (Occ InConcl [L, side] N) | isCNOT z -> Just (z, side)
-  _                                          -> Nothing
-  where
-    isCNOT z = case termOf z of
-      TGate "CNOT" [] _ -> True
-      _                 -> False
+-- True if the judgement is the axiom of a gate with several inputs: |- c : (A (x) B) -o C
+isMultiGateAxiom :: Zipper -> Bool
+isMultiGateAxiom z = case termOf z of
+  TGate _ [] (TFun (TPair _) _) -> True
+  _                               -> False
+
+-- Just the axiom if the token is waiting on an input of a multi-input gate:
+-- path L : p, with L = input of the arrow and p = which input inside the pair
+inMultiGate :: Token -> Maybe Zipper
+inMultiGate tok = case tokPos tok of
+  Pos z (Occ InConcl (L : _) N) | isMultiGateAxiom z -> Just z
+  _                                                  -> Nothing
+
+-- Input positions of a gate axiom, in argument order
+axiomInputs :: Zipper -> [Occ]
+axiomInputs z = [ o | o <- positionsOf z, occFormula o == InConcl, occPol o == N ]
 
 ----- Application of rules, following the paper -----
 
@@ -155,8 +164,8 @@ ruleAt (Pos z occ) = do
   case termOf node of
     TV (TVar x _) _        -> Right (TVAR x)
     TV (TLambda x _ _ _) _ -> Right (TLAMBDA x)
-    TV (TTensor _ _ _) _   -> Right TTENSOR
-    TDecomp a b _ _ _      -> Right (TDECOMP a b)
+    TV (TTensor _ _) _     -> Right TTENSOR
+    TDecomp xs _ _ _       -> Right (TDECOMP xs)
     TApp _ _ _             -> Right TAPP
     TLet x _ _ _ _         -> Right (TLET x)
     TGate g args _         -> Right (TGATE g args)
@@ -199,32 +208,40 @@ applyVar x (Pos z (Occ f path pol)) = case (f, pol) of
   (InPrem _, N) -> mkPos z InConcl path
   _             -> Nothing
 
+-- Tuple node <t0, ..., tn-1>: children [t0 (0), ..., tn-1 (n-1)]
 applyTensor :: Pos -> Maybe Pos
 applyTensor (Pos z (Occ f path pol)) = case (f, pol) of
-  (InPrem y, N) -> ownerOf y [0, 1] z >>= \z' -> mkPos z' (InPrem y) path
+  (InPrem y, N) -> ownerOf y (childrenOf z) z >>= \z' -> mkPos z' (InPrem y) path
   (InPrem y, P) -> up z >>= \z' -> mkPos z' (InPrem y) path
+  -- component i of the conclusion  ->  conclusion of the i-th child
   (InConcl, N)  -> case path of
-      L : ps -> down 0 z >>= \z' -> mkPos z' InConcl ps
-      R : ps -> down 1 z >>= \z' -> mkPos z' InConcl ps
-      []     -> Nothing
+      C i : ps -> down i z >>= \z' -> mkPos z' InConcl ps
+      _        -> Nothing
+  -- leaving the k-th child  ->  component k of the conclusion
   (InConcl, P)  -> do
       k  <- childIndex z
       z' <- up z
-      mkPos z' InConcl ((if k == 0 then L else R) : path)
+      mkPos z' InConcl (C k : path)
 
-applyDecomp :: Name -> Name -> Pos -> Maybe Pos
-applyDecomp x y (Pos z (Occ f path pol)) = case (f, pol) of
+-- Node let <x0, ..., xn-1> = M in N: children [tuple (0), body (1)]
+applyDecomp :: [Name] -> Pos -> Maybe Pos
+applyDecomp xs (Pos z (Occ f path pol)) = case (f, pol) of
   (InPrem v, N) -> ownerOf v [0, 1] z >>= \z' -> mkPos z' (InPrem v) path
-  (InPrem v, P)
-      | v == x    -> sibling 0 z >>= \z' -> mkPos z' InConcl (L : path)
-      | v == y    -> sibling 0 z >>= \z' -> mkPos z' InConcl (R : path)
-      | otherwise -> up z >>= \z' -> mkPos z' (InPrem v) path
+  (InPrem v, P) -> case elemIndex v xs of
+      -- x_i in the body  ->  component i of the tuple
+      Just i  -> sibling 0 z >>= \z' -> mkPos z' InConcl (C i : path)
+      Nothing -> up z >>= \z' -> mkPos z' (InPrem v) path
   (InConcl, N)  -> down 1 z >>= \z' -> mkPos z' InConcl path
   (InConcl, P)  -> case (childIndex z, path) of
-      (Just 0, L : ps) -> sibling 1 z >>= \z' -> mkPos z' (InPrem x) ps
-      (Just 0, R : ps) -> sibling 1 z >>= \z' -> mkPos z' (InPrem y) ps
-      (Just 0, [])     -> Nothing
-      _                -> up z >>= \z' -> mkPos z' InConcl path
+      -- leaving the tuple: component i -> x_i in the body
+      (Just 0, C i : ps) | i < length xs -> sibling 1 z >>= \z' -> mkPos z' (InPrem (xs !! i)) ps
+      (Just 0, _)        -> Nothing
+      -- leaving the body -> conclusion of the let
+      _                  -> up z >>= \z' -> mkPos z' InConcl path
+
+-- Indices of the children of a node
+childrenOf :: Zipper -> [Int]
+childrenOf z = [0 .. length (subForest (focus z)) - 1]
 
 applyLambda :: Name -> Pos -> Maybe Pos
 applyLambda x (Pos z (Occ f path pol)) = case (f, pol) of
@@ -256,7 +273,7 @@ applyRule rule pos =
         TVAR x      -> applyVar x pos
         TAPP        -> applyApp pos
         TTENSOR     -> applyTensor pos
-        TDECOMP x y -> applyDecomp x y pos
+        TDECOMP xs  -> applyDecomp xs pos
         TLET x      -> applyLet x pos
         TGATE _ _   -> applyGate pos
         TIF         -> Nothing
@@ -274,9 +291,9 @@ stepToken tok cfg = do
   case rule of
     -- The token is on the input of a gate axiom: emits the gate
     TGATE g [] | occPol occ == N -> do
-      case g of
-        "CNOT" -> Left ("A CNOT is fired by fireCNOT, not by stepToken: " ++ showPos pos)
-        _      -> Right ()
+      if isMultiGateAxiom (posNode pos)
+        then Left ("A multi-input gate is fired by fireGate, not by stepToken: " ++ showPos pos)
+        else Right ()
       pos' <- applyRule rule pos
       let n    = cfgNextLabel cfg + 1
           lOut = Lab n
@@ -287,39 +304,44 @@ stepToken tok cfg = do
       pos' <- applyRule rule pos
       return (tok { tokPos = pos' }, cfg)
 
--- Circuit rule for CNOT
-fireCNOT :: Token -> Token -> Config -> Either String (Token, Token, Config)
-fireCNOT ctl tgt cfg = do
-  ctlPos <- applyRule (TGATE "CNOT" []) (tokPos ctl)
-  tgtPos <- applyRule (TGATE "CNOT" []) (tokPos tgt)
+-- Circuit rule for a gate with several inputs: all its tokens are on the
+-- inputs of the axiom (in argument order), so the gate is emitted in one
+-- piece and every token moves to its output.
+fireGate :: String -> [Token] -> Config -> Either String ([Token], Config)
+fireGate g toks cfg = do
+  poss <- mapM (applyRule (TGATE g []) . tokPos) toks
   let n    = cfgNextLabel cfg
-      out1 = Lab (n + 1)
-      out2 = Lab (n + 2)
-      gate = CNOT (tokLabel ctl) out1 (tokLabel tgt) out2
-  return ( ctl { tokPos = ctlPos, tokLabel = out1 }
-         , tgt { tokPos = tgtPos, tokLabel = out2 }
-         , cfg { cfgCircuit = modifyAt (tokAddr ctl) (++ [gate]) (cfgCircuit cfg)
-               , cfgNextLabel = n + 2 } )
+      outs = [ Lab (n + i) | i <- [1 .. length toks] ]
+      gate = MultiGate g (map tokLabel toks) outs
+      toks' = [ t { tokPos = p, tokLabel = l } | (t, p, l) <- zip3 toks poss outs ]
+  case toks of
+    []      -> Left ("fireGate: no tokens for gate " ++ g)
+    (t : _) -> return ( toks'
+                      , cfg { cfgCircuit = modifyAt (tokAddr t) (++ [gate]) (cfgCircuit cfg)
+                            , cfgNextLabel = n + length toks } )
 
--- Indices (control, target) of the first CNOT with both inputs occupied
-readyCNOT :: [Token] -> Maybe (Int, Int)
-readyCNOT toks = listToMaybe
-  [ (i, j)
-  | (i, ctl) <- itoks, Just (z1, L) <- [inCNOT ctl]
-  , (j, tgt) <- itoks, Just (z2, R) <- [inCNOT tgt]
-  , z1 == z2, tokAddr ctl == tokAddr tgt ]
+-- The first multi-input gate with all its inputs occupied: its name and the
+-- indices of its tokens, in argument order
+readyGate :: [Token] -> Maybe (String, [Int])
+readyGate toks = listToMaybe
+  [ (g, idxs)
+  | (i, t) <- itoks, Just z <- [inMultiGate t]
+  , TGate g [] _ <- [termOf z]
+  , let addr = tokAddr t
+  , let at o = [ k | (k, t') <- itoks, posNode (tokPos t') == z, posOcc (tokPos t') == o, tokAddr t' == addr ]
+  , let idxs = concatMap at (axiomInputs z)
+  , length idxs == length (axiomInputs z)
+  , i == head idxs ]                      -- report each gate once, from its first token
   where itoks = zip [0 ..] toks
 
-
--- Fires every ready CNOT, keeping the tokens in their places in the list
-fireAllCNOT :: [Token] -> Config -> Either String ([Token], Config)
-fireAllCNOT toks cfg = case readyCNOT toks of
-  Nothing     -> Right (toks, cfg)
-  Just (i, j) -> do
-    (ctl', tgt', cfg') <- fireCNOT (toks !! i) (toks !! j) cfg
-    let toks'  = take i toks  ++ [ctl'] ++ drop (i + 1) toks
-        toks'' = take j toks' ++ [tgt'] ++ drop (j + 1) toks'
-    fireAllCNOT toks'' cfg'
+-- Fires every ready gate, keeping the tokens in their places in the list
+fireAllGates :: [Token] -> Config -> Either String ([Token], Config)
+fireAllGates toks cfg = case readyGate toks of
+  Nothing        -> Right (toks, cfg)
+  Just (g, idxs) -> do
+    (fired, cfg') <- fireGate g (map (toks !!) idxs) cfg
+    let toks' = foldl (\acc (i, t) -> take i acc ++ [t] ++ drop (i + 1) acc) toks (zip idxs fired)
+    fireAllGates toks' cfg'
 
 
 allNodes :: Zipper -> [Zipper]
@@ -368,7 +390,7 @@ runMachine cfg0 = do
 
       -- one step for one token finished tokens and tokens waiting at a CNOT are left alone
       go (done, c) t
-        | stopCond (tokPos t) || isJust (inCNOT t) = Right (done ++ [t], c)
+        | stopCond (tokPos t) || isJust (inMultiGate t) = Right (done ++ [t], c)
         | otherwise = do
             (t', c') <- stepToken t c
             return (done ++ [t'], c')
@@ -378,7 +400,7 @@ runMachine cfg0 = do
         | all (stopCond . tokPos) toks = Right (toks, c)
         | otherwise = do
             (toks1, c1) <- foldM go ([], c) toks
-            (toks2, c2) <- fireAllCNOT toks1 c1
+            (toks2, c2) <- fireAllGates toks1 c1
             if map tokPos toks2 == map tokPos toks
               then Left ("Deadlock: tokens waiting at " ++ show
                          [ showPos (tokPos t) | t <- toks2, not (stopCond (tokPos t)) ])

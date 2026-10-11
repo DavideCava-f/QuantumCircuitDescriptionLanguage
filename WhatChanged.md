@@ -4,7 +4,215 @@
 
 Was mainly let the same, changed a little the way of printing the circuit. Parser was not changed, only changed that in tuples always it was structured (ctx,term) as appeared on a derivation.
 
-### CreateDerivation.hs, Lexer.hs, TypeTree.hs
+### CreateDerivation.hs
+
+I changed the program so now accepts any gate and in particular any arity, therefore in ``buildDerivationV`` and ``getGateType`` I made some changes so it accepts these modifications:
+
+```hs
+-- buildDerivationV before:
+  TTensor t1 t2 tensorType ->   
+    let t1Tree = buildDerivation prem t1
+        t2Tree = buildDerivation prem t2
+    in Node 
+         { rootLabel = (prem, TV (TTensor t1 t2 tensorType) t, t)
+         , subForest = [t1Tree, t2Tree] 
+         }
+
+-- buildDerivationV after:
+  TTensor ts tensorType ->   
+    Node 
+      { rootLabel = (prem, TV (TTensor ts tensorType) t, t)
+      , subForest = map (buildDerivation prem) ts
+      }
+
+-- getGateType before:
+getGateType :: String -> Type
+getGateType "CNOT" = 
+  let qpair = TPair TQbit TQbit 
+  in TFun qpair qpair                     -- (Q x Q) -> (Q x Q)
+getGateType "M"      = TFun TQbit TBit
+getGateType _      = TFun TQbit TQbit
+
+-- getGateType after:
+getGateType :: String -> [TypedTerm] -> Type -> Type
+getGateType _ [arg] t = TFun (getTType arg) t
+getGateType g args  _ = error ("getGateType: gate " ++ g ++ " with " ++ show (length args) ++ " arguments")
+```
+
+### TypeTree.hs
+
+Here it's probably where most of the changes regarding accepting any gate with any arity are. Firstly when defining the data:
+
+```hs
+-- before:
+data Type = TBit | TQbit | TFun Type Type | TPair Type Type
+  deriving (Eq, Show)
+
+-- after:
+data Type = TBit | TQbit | TFun Type Type | TPair [Type]   
+  deriving (Eq, Show)
+
+-- before:
+data Term 
+  = App Term Term -- H(x) CNOT(x,y) 
+  | Let Name Type Term Term -- let x = q1 in H(x)
+  | Decomp Name Name Term Term  -- let <x,y> = t in t
+  | If Term Term Term
+  | New Int
+  | Gate String [Term]          -- Per U(v1...vn) come H, X, CNOT
+  | V Value
+  deriving (Show)
+
+-- after:
+data Term 
+  = App Term Term                       -- H(x) CNOT(x,y) 
+  | Let Name Type Term Term             -- let x = q1 in H(x)
+  | Decomp [Name] Term Term             -- let <x1,...,xn> = t in t
+  | If Term Term Term
+  | New Int
+  | Gate Name [Term]                  -- U(v1...vn) such as H, X, CNOT
+  | V Value
+  deriving (Show)
+
+-- before:
+data Value
+  = Var Name
+  | Lambda Name Type Term
+  | Tensor Term Term
+  deriving (Show)
+
+-- after:
+data Value
+  = Var Name
+  | Lambda Name Type Term
+  | Tensor [Term]                       
+  deriving (Show)
+
+-- before:
+data TypedValue
+  = TVar Name Type
+  | TLambda Name Type TypedTerm Type  -- Lambda: arg, tipo_arg, corpo_tipizzato, tipo_totale
+  | TTensor TypedTerm TypedTerm Type    -- Coppia di due termini tipizzati
+  deriving (Show)
+
+--after:
+data TypedValue
+  = TVar Name Type
+  | TLambda Name Type TypedTerm Type    
+  | TTensor [TypedTerm] Type            
+  deriving (Show)
+
+-- before:
+data TypedTerm
+  = TV TypedValue Type
+  | TApp TypedTerm TypedTerm Type
+  | TNew Int String Type
+  | TGate String [TypedTerm] Type
+  | TLet Name Type TypedTerm TypedTerm Type
+  | TDecomp Name Name TypedTerm TypedTerm Type
+  | TIf TypedTerm TypedTerm TypedTerm Type
+  deriving (Show)
+
+-- after:
+data TypedTerm
+  = TV TypedValue Type
+  | TApp TypedTerm TypedTerm Type
+  | TNew Int String Type
+  | TGate String [TypedTerm] Type
+  | TLet Name Type TypedTerm TypedTerm Type
+  | TDecomp [Name] TypedTerm TypedTerm Type
+  | TIf TypedTerm TypedTerm TypedTerm Type
+  deriving (Show)
+```
+
+Secondly in the function ```annoateN```:
+
+```hs
+-- before:
+        Tensor t1 t2 -> do
+                    (tt1, ctx1) <- annotate ctx t1
+                    (tt2, ctx2) <- annotate ctx1 t2
+                    
+                    let pairTy = TPair (getTType tt1) (getTType tt2)
+                    
+                    return (TV (TTensor tt1 tt2 pairTy) pairTy, ctx2)
+-- after:
+        Tensor ts -> do
+            (ctxN, revTts, kN) <- foldM checkArg (ctx, [], k) ts
+            let tts    = reverse revTts
+                pairTy = TPair (map getTType tts)
+            return (ctxN, TV (TTensor tts pairTy) pairTy, kN)
+
+-- before:
+    Gate name args -> do
+        -- Funzione helper che processa la lista di argomenti
+        (tArgs, ctxAfterArgs) <- annotateList ctx args
+        let argTypes = map getTType tArgs
+        -- Controlla se il gate esiste e che tipi restituisce
+        retTy <- checkGate name argTypes 
+        let finalArgs = case (name, tArgs) of
+                ("CNOT", [arg1, arg2]) -> 
+                    let pairTy = TPair (getTType arg1) (getTType arg2)
+                    in [TV (TTensor arg1 arg2 pairTy) pairTy]
+                _ -> tArgs
+        return (TGate name finalArgs retTy, ctxAfterArgs)
+-- after:
+    Gate name args -> do
+        (ctxAfterArgs, revArgs, k1) <- foldM checkArg (ctx, [], k) args
+        -- reverse so it mantains order of appearence 
+        let tArgs = reverse revArgs               
+            argTypes = map getTType tArgs
+        -- Checks whether the gate exists and which types it returns
+        retTy <- checkGate name argTypes 
+        -- A gate with several inputs takes them as one tuple
+        let finalArgs = case tArgs of
+                []  -> []
+                [a] -> [a]
+                _   -> [TV (TTensor tArgs (TPair argTypes)) (TPair argTypes)]
+        return (ctxAfterArgs, TGate name finalArgs retTy, k1)
+
+```
+Also added the function:
+```hs
+checkArg :: (Context, [TypedTerm], Int) -> Term -> Either String (Context, [TypedTerm], Int)
+checkArg (c, acc, n) t = do
+    (c', tt, n') <- annotateN n c t
+    return (c', tt : acc, n')
+```
+And instead of stating acceptable gates by their name, just checks the structure:
+```hs
+-- before:
+checkGate :: String -> [Type] -> Either String Type
+checkGate name args = case (name, args) of
+    -- Gate a 1 Qubit
+    ("H", [TQbit])    -> Right TQbit
+    ("X", [TQbit])    -> Right TQbit
+    ("Z", [TQbit])    -> Right TQbit
+    ("T", [TQbit])    -> Right TQbit
+    ("Y", [TQbit])    -> Right TQbit
+
+    -- Gate a 2 Qubit (CNOT)
+    ("CNOT", [TQbit, TQbit]) -> Right (TPair TQbit TQbit)
+
+    -- Gate di Misura (trasforma Qbit in Bit classico)
+    ("M", [TQbit])    -> Right TBit
+
+    -- Errori comuni
+    ("CNOT", _) -> Left "CNOT richiede esattamente due argomenti di tipo Qbit."
+    (n, _)      -> Left $ "Gate sconosciuto o argomenti errati per: " ++ n
+
+-- after:
+checkGate :: String -> [Type] -> Either String Type
+checkGate name args
+    | any (/= TQbit) args =
+        Left $ "Gate " ++ name ++ ": every argument must be a qbit, received " ++ show args
+    | name == "M" = case args of
+        [_] -> Right TBit
+        _   -> Left $ "M measures exactly one qubit, received " ++ show (length args) ++ " arguments"
+    | otherwise = Right (tupleOf args)
+```
+
+### Lexer.hs
 
 No changes.
 

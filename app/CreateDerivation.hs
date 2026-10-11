@@ -2,7 +2,7 @@ module CreateDerivation where
 
 import qualified Data.Set as Set
 import qualified Data.Map as Map
-import TypeTree (Type(..),TypedTerm(..),TypedValue(..))
+import TypeTree (Type(..),TypedTerm(..),TypedValue(..),getTType)
 import Data.List (intercalate)
 
 type Prem = Map.Map String Type
@@ -39,7 +39,7 @@ buildDerivation prem term = case term of
 
      childTrees = map (buildDerivation prem) args
 
-     gateType = getGateType g
+     gateType = getGateType g args t
       
      gateLeaf = Node 
                  { rootLabel = (prem, TGate g [] gateType, gateType)
@@ -64,23 +64,24 @@ buildDerivation prem term = case term of
         { rootLabel = (prem, TLet x xType val body t, t)
         , subForest = [valTree, bodyTree] -- The two branches of the premises
         }
-  TDecomp x y pair body t -> 
+  TDecomp names pair body t -> 
       let 
         -- Premise derivation to be deconstructed 
         pairTree = buildDerivation prem pair
         
-       -- Extraction of individual variable types
-        (xType, yType) = case typeOf pair of
-                           TPair t1 t2 -> (t1, t2)
+       -- Extraction of the component types
+        compTypes = case getTType pair of
+                      TPair ts -> ts
+                      other    -> error ("Decomposition of a non-tuple type: " ++ show other)
         
-      -- Context update
-        extPrem = Map.insert x xType (Map.insert y yType prem)
+      -- Context update: one variable per component
+        extPrem = foldr (uncurry Map.insert) prem (zip names compTypes)
         
         -- Body derivation
         bodyTree = buildDerivation extPrem body
         
       in Node 
-           { rootLabel = (prem, TDecomp x y pair body t, t)
+           { rootLabel = (prem, TDecomp names pair body t, t)
            , subForest = [pairTree, bodyTree] 
            }
 
@@ -134,13 +135,11 @@ buildDerivationV prem val t = case val of
          , subForest = [bodyTree] 
          }
 
-  TTensor t1 t2 tensorType ->   
-    let t1Tree = buildDerivation prem t1
-        t2Tree = buildDerivation prem t2
-    in Node 
-         { rootLabel = (prem, TV (TTensor t1 t2 tensorType) t, t)
-         , subForest = [t1Tree, t2Tree] 
-         }
+  TTensor ts tensorType ->   
+    Node 
+      { rootLabel = (prem, TV (TTensor ts tensorType) t, t)
+      , subForest = map (buildDerivation prem) ts
+      }
 
 
 --- Cleaning Tree
@@ -152,14 +151,14 @@ freeVarsTerm term = case term of
   TGate _ args _           -> Set.unions (map freeVarsTerm args)
   TApp f arg _             -> Set.union (freeVarsTerm f) (freeVarsTerm arg)
   TLet x _ val body _      -> Set.union (freeVarsTerm val) (Set.delete x (freeVarsTerm body))
-  TDecomp x y pair body _  -> Set.union (freeVarsTerm pair) (freeVarsTerm body Set.\\ Set.fromList [x, y])
+  TDecomp xs pair body _   -> Set.union (freeVarsTerm pair) (freeVarsTerm body Set.\\ Set.fromList xs)
   TIf c t e _              -> Set.unions [freeVarsTerm c, freeVarsTerm t, freeVarsTerm e]
 
 freeVarsVal :: TypedValue -> Set.Set String
 freeVarsVal val = case val of
   TVar x _                 -> Set.singleton x
   TLambda x _ body _       -> Set.delete x (freeVarsTerm body)
-  TTensor t1 t2 _          -> Set.union (freeVarsTerm t1) (freeVarsTerm t2)
+  TTensor ts _             -> Set.unions (map freeVarsTerm ts)
 
 cleanDerivationTree :: TypeDerivation -> TypeDerivation
 cleanDerivationTree (Node (prem, term, typ) subs) =
@@ -178,20 +177,9 @@ cleanDerivationTree (Node (prem, term, typ) subs) =
 
 -- Utils
 
-getGateType :: String -> Type
-getGateType "CNOT" = 
-  let qpair = TPair TQbit TQbit 
-  in TFun qpair qpair                     -- (Q x Q) -> (Q x Q)
-getGateType "M"      = TFun TQbit TBit
-getGateType _      = TFun TQbit TQbit
-
-typeOf :: TypedTerm -> Type
-typeOf (TV _ t)            = t
-typeOf (TApp _ _ t)        = t
-typeOf (TGate _ _ t)       = t
-typeOf (TLet _ _ _ _ t)    = t
-typeOf (TDecomp _ _ _ _ t) = t
-typeOf (TIf _ _ _ t)       = t
+getGateType :: String -> [TypedTerm] -> Type -> Type
+getGateType _ [arg] t = TFun (getTType arg) t
+getGateType g args  _ = error ("getGateType: gate " ++ g ++ " with " ++ show (length args) ++ " arguments")
 
 -- Pretty Print
 prettyPrintDerivation :: TypeDerivation -> String
@@ -237,7 +225,7 @@ showTypePretty :: Type -> String
 showTypePretty TQbit        = colorQbit "qbit"
 showTypePretty TBit        = colorQbit "bit"
 showTypePretty (TFun t1 t2) = colorTFun "TFUN" ++ " (" ++ showTypePretty t1 ++ " -> " ++ showTypePretty t2 ++ ")"
-showTypePretty (TPair t1 t2)= colorTPair "TPAIR" ++ " (" ++ showTypePretty t1 ++ ", " ++ showTypePretty t2 ++ ")"
+showTypePretty (TPair ts)   = colorTPair "TPAIR" ++ " (" ++ intercalate ", " (map showTypePretty ts) ++ ")"
 showTypePretty t            = show t -- Fallback for other unspecified types
 showTermPretty :: TypedTerm -> String
 showTermPretty term = case term of
@@ -246,11 +234,11 @@ showTermPretty term = case term of
   TNew _ varId _             -> varId
   TApp f arg _               -> "(" ++ showTermPretty f ++ " " ++ showTermPretty arg ++ ")"
   TLet x _ val body _        -> "let " ++ x ++ " = " ++ showTermPretty val ++ " in " ++ showTermPretty body
-  TDecomp x y pair body _    -> "let (" ++ x ++ ", " ++ y ++ ") = " ++ showTermPretty pair ++ " in " ++ showTermPretty body
+  TDecomp xs pair body _     -> "let <" ++ intercalate ", " xs ++ "> = " ++ showTermPretty pair ++ " in " ++ showTermPretty body
   TIf c t e _                -> "if " ++ showTermPretty c ++ " then " ++ showTermPretty t ++ " else " ++ showTermPretty e
 
 showValPretty :: TypedValue -> String
 showValPretty val = case val of
   TVar x _                   -> x
   TLambda x argT body _      -> "(\\" ++ x ++ ":" ++ show argT ++ ". " ++ showTermPretty body ++ ")"
-  TTensor t1 t2 _            -> "(" ++ showTermPretty t1 ++ " (x) " ++ showTermPretty t2 ++ ")"
+  TTensor ts _               -> "<" ++ intercalate ", " (map showTermPretty ts) ++ ">"

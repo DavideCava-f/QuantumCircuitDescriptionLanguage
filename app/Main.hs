@@ -20,17 +20,18 @@ pTypeAtom =
   <|> (rWord "qbit" >> return TQbit)
   <|> parens pType
 
+-- A1 * ... * An -> B: the tensor binds tighter than the arrow, which associates
+-- to the right. A tensor of n >= 2 atoms is one n-ary TPair.
 pType :: Parser Type
 pType = do
-  t1 <- pTypeAtom
+  atoms <- pTypeAtom `sepBy1` tensor
+  let t1 = case atoms of
+        [t] -> t
+        ts  -> TPair ts
   do
-      symbol "->"
+      _ <- symbol "->"
       t2 <- pType
       return (TFun t1 t2)
-   <|> do
-      tensor
-      t2 <- pType
-      return (TPair t1 t2)
    <|> return t1
 
 --------
@@ -54,16 +55,12 @@ letParser = do
 
 decompParser :: Parser Term
 decompParser = do
-    _        <- rWord "let"
-    (i1, i2) <- angles $ do
-        v1 <- identifier
-        comma
-        v2 <- identifier
-        return (v1, v2)
-    _        <- equal
-    t1       <- termParser
-    _        <- rWord "in"
-    Decomp i1 i2 t1 <$> termParser
+    _     <- rWord "let"
+    names <- angles (identifier `sepBy1` comma)
+    _     <- equal
+    t1    <- termParser
+    _     <- rWord "in"
+    Decomp names t1 <$> termParser
 
 ifParser :: Parser Term
 ifParser = do
@@ -82,29 +79,17 @@ newParser = do
         then return (New val)
         else fail "The argument for 'new' must be 0 or 1"
 
+-- Gate application NAME(t1, ..., tn): the name is one or more upper-case
+-- letters followed by '('. Which names are valid gates, and with how many
+-- arguments, is decided by the type checker (checkGate).
+gateName :: Parser String
+gateName = try (lexeme (some upperChar <* notFollowedBy (alphaNumChar <|> char '_')) <* lookAhead (char '('))
+
 gateParser :: Parser Term
 gateParser = do
-    name <- identifier
-    case name of
-        "CNOT" -> do
-
-            args <- parens $ do
-                t1 <- termParser
-                _  <- comma
-                t2 <- termParser
-                return [t1, t2]
-            return (Gate name args)
-
-        "H"    -> oneArgGate name
-        "X"    -> oneArgGate name
-        "M"    -> oneArgGate name
-
-        _ -> fail $ "Unknown gate: " ++ name
-
-oneArgGate :: String -> Parser Term
-oneArgGate name = do
-    arg <- parens termParser
-    return (Gate name [arg])
+    name <- gateName
+    args <- parens (termParser `sepBy1` comma)
+    return (Gate name args)
 
 ----
 
@@ -132,14 +117,13 @@ lambdaParser = do
     _    <- dot
     Lambda x tipo <$> termParser
 
+-- Tuple <t1, ..., tn> with n >= 2
 pairParser :: Parser Value
 pairParser = do
-    (i1, i2) <- angles $ do
-        v1   <- termParser
-        _    <- comma
-        v2   <- termParser
-        return (v1, v2)
-    return (Tensor i1 i2)
+    ts <- angles (termParser `sepBy1` comma)
+    case ts of
+        [_] -> fail "A tuple needs at least two components"
+        _   -> return (Tensor ts)
 
 
 varParser :: Parser Value
@@ -194,9 +178,9 @@ main = do
                             case startMachine c of
                               Left machineErr -> putStrLn $ "Machine error: " ++ machineErr
                               Right (final, assocList, finalList) -> do
-                                print final
-                                prettyPrintRootType c
-                                prettyPrintAssocList assocList finalList
+                                --print final
+                                --prettyPrintRootType c
+                                --prettyPrintAssocList assocList finalList
                                 let wireNames = [ (lab, wireName p) | (p, lab) <- assocList ++ finalList ]
                                 printAsciiCircuit wireNames final
         [] -> putStrLn "Error: You must specify a filename! (e.g., cabal run -- examples/file.qqdc)"
@@ -217,9 +201,9 @@ prettyPrintRootType derivation = putStrLn (formatRootType derivation)
 
 gateInputs, gateOutputs :: Gate -> [Label]
 gateInputs  (Wire _ i _)     = [i]
-gateInputs  (CNOT i1 _ i2 _)   = [i1, i2]
+gateInputs  (MultiGate _ is _)   = is
 gateOutputs (Wire _ _ o)     = [o]
-gateOutputs (CNOT _ o1 _ o2)   = [o1, o2]
+gateOutputs (MultiGate _ _ os)   = os
 
 isIdentityGate :: Gate -> Bool
 isIdentityGate (Wire "I" _ _) = True
@@ -259,7 +243,7 @@ asciiCircuit names circuit
 
     -- Wire: (initial label, gates crossed, final label)
     outFor (Wire _ _ o) _ = o
-    outFor (CNOT i1 o1 _ o2) l = if l == i1 then o1 else o2
+    outFor (MultiGate _ is os) l = maybe l (os !!) (lookup l (zip is [0 ..]))
     chain l = case Map.lookup l consumer of
       Nothing -> ([], l)
       Just gi -> let (gs, end) = chain (outFor (gateAt gi) l) in (gi : gs, end)
@@ -271,8 +255,8 @@ asciiCircuit names circuit
                  , lab <- l0 : concat [ gateOutputs (gateAt gi) | gi <- gs ] ]
     rowIn lab = Map.findWithDefault (-1) lab rowOfLabel
 
-    cnotSpans = [ (cols Map.! gi, min r1 r2, max r1 r2)
-                | (gi, CNOT i1 _ i2 _) <- indexed, let r1 = rowIn i1, let r2 = rowIn i2 ]
+    cnotSpans = [ (cols Map.! gi, minimum rs, maximum rs)
+                | (gi, MultiGate _ is _) <- indexed, let rs = map rowIn is ]
 
     -- Column where the wire becomes classical (after an M), if any
     measureCol gs = case [ cols Map.! gi | gi <- gs, Wire "M" _ _ <- [gateAt gi] ] of
@@ -290,7 +274,8 @@ asciiCircuit names circuit
           here = [ gateAt gi | gi <- gs, cols Map.! gi == c, not (isIdentityGate (gateAt gi)) ]
       in case here of
            (Wire g _ _ : _)   -> [wire, wire] ++ take 1 g ++ [wire, wire]
-           (CNOT i1 _ _ _ : _)  -> [wire, wire] ++ (if rowIn i1 == r then "o" else "X") ++ [wire, wire]
+           -- controls (all inputs but the last) as 'o', the target as 'X'
+           (MultiGate _ is _ : _) -> [wire, wire] ++ (if rowIn (last is) == r then "X" else "o") ++ [wire, wire]
            []                       -> plain
 
     gapCell r c = if any (\(cc, lo, hi) -> cc == c && lo <= r && r < hi) cnotSpans then "  |  " else "     "

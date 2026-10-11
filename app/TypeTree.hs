@@ -4,13 +4,13 @@ import Control.Monad (foldM)
 
 type Name = String
 
-data Type = TBit | TQbit | TFun Type Type | TPair Type Type
+data Type = TBit | TQbit | TFun Type Type | TPair [Type]   
   deriving (Eq, Show)
 
 data Term 
   = App Term Term                       -- H(x) CNOT(x,y) 
   | Let Name Type Term Term             -- let x = q1 in H(x)
-  | Decomp Name Name Term Term          -- let <x,y> = t in t
+  | Decomp [Name] Term Term             -- let <x1,...,xn> = t in t
   | If Term Term Term
   | New Int
   | Gate Name [Term]                  -- U(v1...vn) such as H, X, CNOT
@@ -20,13 +20,13 @@ data Term
 data Value
   = Var Name
   | Lambda Name Type Term
-  | Tensor Term Term
+  | Tensor [Term]                       
   deriving (Show)
 
 data TypedValue
   = TVar Name Type
-  | TLambda Name Type TypedTerm Type    -- Lambda: arg, arg_type, typed_body, total_type
-  | TTensor TypedTerm TypedTerm Type    -- Pair of two typed terms
+  | TLambda Name Type TypedTerm Type    
+  | TTensor [TypedTerm] Type            
   deriving (Show)
 
 data TypedTerm
@@ -35,7 +35,7 @@ data TypedTerm
   | TNew Int String Type
   | TGate String [TypedTerm] Type
   | TLet Name Type TypedTerm TypedTerm Type
-  | TDecomp Name Name TypedTerm TypedTerm Type
+  | TDecomp [Name] TypedTerm TypedTerm Type
   | TIf TypedTerm TypedTerm TypedTerm Type
   deriving (Show)
 
@@ -46,8 +46,6 @@ annotate ctx term = do
     (ctx',tt, _) <- annotateN 0 ctx term
     return (ctx',tt)
 
--- k: number of `new` named so far. It is threaded separately from the context
--- because a lambda discards the context of its body.
 annotateN :: Int -> Context -> Term -> Either String (Context,TypedTerm, Int)
 annotateN k ctx term = case term of 
 
@@ -64,32 +62,26 @@ annotateN k ctx term = case term of
             let lamTy = TFun tyArg (getTType tBody)
             return (ctx, TV (TLambda x tyArg tBody lamTy) lamTy, k1)
         -- Pairs, find the typed terms, compute the type and return
-        Tensor t1 t2 -> do
-                    (ctx1, tt1, k1) <- annotateN k ctx t1
-                    (ctx2, tt2, k2) <- annotateN k1 ctx1 t2
-                    
-                    let pairTy = TPair (getTType tt1) (getTType tt2)
-                    
-                    return (ctx2, TV (TTensor tt1 tt2 pairTy) pairTy, k2)
+        -- Tuples: check the components left to right, threading the context
+        Tensor ts -> do
+            (ctxN, revTts, kN) <- foldM checkArg (ctx, [], k) ts
+            let tts    = reverse revTts
+                pairTy = TPair (map getTType tts)
+            return (ctxN, TV (TTensor tts pairTy) pairTy, kN)
     -- 2. GATE: Checks the arguments in sequence, CNOT has two but it scales (might be useful)
     Gate name args -> do
-        -- Recursively covers args :: Term structure (avoiding annotateList)
         (ctxAfterArgs, revArgs, k1) <- foldM checkArg (ctx, [], k) args
         -- reverse so it mantains order of appearence 
         let tArgs = reverse revArgs               
             argTypes = map getTType tArgs
         -- Checks whether the gate exists and which types it returns
         retTy <- checkGate name argTypes 
-        let finalArgs = case (name, tArgs) of
-                ("CNOT", [arg1, arg2]) -> 
-                    let pairTy = TPair (getTType arg1) (getTType arg2)
-                    in [TV (TTensor arg1 arg2 pairTy) pairTy]
-                _ -> tArgs
+        -- A gate with several inputs takes them as one tuple
+        let finalArgs = case tArgs of
+                []  -> []
+                [a] -> [a]
+                _   -> [TV (TTensor tArgs (TPair argTypes)) (TPair argTypes)]
         return (ctxAfterArgs, TGate name finalArgs retTy, k1)
-      where
-        checkArg (c, acc, n) t = do
-            (c', tt, n') <- annotateN n c t
-            return (c', tt : acc, n')
 
     -- 3. LET: Introduces x, checks the body, then removes it
     Let x ty val body -> do
@@ -102,16 +94,20 @@ annotateN k ctx term = case term of
             else return (ctx2, TLet x ty tVal tBody (getTType tBody), k2)
 
     -- 4. DECOMP: Unpacks a pair <x,y>
-    Decomp x y t1 t2 -> do
+    Decomp names t1 t2 -> do
         (ctx1, tt1, k1) <- annotateN k ctx t1
         case getTType tt1 of
-            TPair tx ty -> do
-                -- Add x and y to the context
-                (ctx2, tt2, k2) <- annotateN k1 ((x, tx) : (y, ty) : ctx1) t2
-                -- Cleanup: x and y must not escape the Decomp
-                let finalCtx = filter (\(n,_) -> n /= x && n /= y) ctx2
-                return (finalCtx, TDecomp x y tt1 tt2 (getTType tt2), k2)
-            _ -> Left "Decomp requires a Pair type."
+            TPair tys
+                | length tys /= length names ->
+                    Left $ "Decomposition of " ++ show (length names) ++ " names, but the tuple has "
+                           ++ show (length tys) ++ " components."
+                | otherwise -> do
+                    -- Add the names to the context
+                    (ctx2, tt2, k2) <- annotateN k1 (zip names tys ++ ctx1) t2
+                    -- Cleanup: the names must not escape the Decomp
+                    let finalCtx = filter (\(n,_) -> n `notElem` names) ctx2
+                    return (finalCtx, TDecomp names tt1 tt2 (getTType tt2), k2)
+            _ -> Left "Decomp requires a tuple type."
 
     -- 5. APPLICATION: f(x)
     App f arg -> do
@@ -156,7 +152,11 @@ annotateN k ctx term = case term of
         else Left $ "Type error: 'new' accepts only 0 or 1, received: " ++ show n
 
 
---For example in Values it consumes the symbol
+checkArg :: (Context, [TypedTerm], Int) -> Term -> Either String (Context, [TypedTerm], Int)
+checkArg (c, acc, n) t = do
+    (c', tt, n') <- annotateN n c t
+    return (c', tt : acc, n')
+
 lookupAndConsume :: Name -> Context -> Either String (Type, Context)
 lookupAndConsume x [] = Left $ "Linearity error: variabile '" ++ x ++ "' not found or already used."
 lookupAndConsume x ((n, t):xs)
@@ -175,21 +175,21 @@ getTType term = case term of
     (TApp _ _ t)        -> t
     (TGate _ _ t)       -> t
     (TLet _ _ _ _ t)    -> t
-    (TDecomp _ _ _ _ t) -> t
+    (TDecomp _ _ _ t)   -> t
     (TIf _ _ _ t)       -> t
     x                   -> error $ "Missing pattern in getTType:" ++ show x
 
--- Gates type-check
+-- Tuple of the given types, or the type itself if there is only one
+tupleOf :: [Type] -> Type
+tupleOf []  = error "tupleOf: empty list"
+tupleOf [t] = t
+tupleOf ts  = TPair ts
+
 checkGate :: String -> [Type] -> Either String Type
-checkGate name args = case (name, args) of
-    ("H", [TQbit])    -> Right TQbit
-    ("X", [TQbit])    -> Right TQbit
-    ("Z", [TQbit])    -> Right TQbit
-    ("T", [TQbit])    -> Right TQbit
-    ("Y", [TQbit])    -> Right TQbit
-    ("CNOT", [TQbit, TQbit]) -> Right (TPair TQbit TQbit)
-    ("M", [TQbit])    -> Right TBit -- Meas :: Qbit --o Bit
-    ("CNOT", _) -> Left "CNOT richiede esattamente due argomenti di tipo Qbit."
-    (n, _)      -> Left $ "Gate sconosciuto o argomenti errati per: " ++ n
-
-
+checkGate name args
+    | any (/= TQbit) args =
+        Left $ "Gate " ++ name ++ ": every argument must be a qbit, received " ++ show args
+    | name == "M" = case args of
+        [_] -> Right TBit
+        _   -> Left $ "M measures exactly one qubit, received " ++ show (length args) ++ " arguments"
+    | otherwise = Right (tupleOf args)
