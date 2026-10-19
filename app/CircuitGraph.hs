@@ -14,7 +14,8 @@ data Position = L | R | C Int deriving (Show, Eq)
 data Polarity = P | N deriving (Show, Eq)
 newtype Label = Lab Int deriving (Show, Eq, Ord)
 
-data Formula = InConcl | InPrem Name deriving (Eq)
+data Formula = InConcl | InPrem Name
+  deriving (Eq)
 
 instance Show Formula where
   show InConcl    = "Concl"
@@ -44,17 +45,13 @@ data Token = Token
 
 type TokenLabelList = [(Pos, Label)]
 
-data Gate
-  = Wire String Label Label           -- one-qubit gate: name, labelIn, labelOut
-  | MultiGate String [Label] [Label]  -- n-qubit gate: name, inputs, outputs (same order,
-                                      -- the order of the arguments, e.g. controls first)
+data Gate = Wire String Label Label | MultiGate String [Label] [Label] | Cond Label Circuit Circuit
+
   deriving (Show, Eq)
 
 type Circuit = [Gate]
 
-data ExtCircuit
-  = Leaf Circuit
-  | Branch Circuit Label ExtCircuit ExtCircuit
+data ExtCircuit = Leaf Circuit | Branch Circuit Label ExtCircuit ExtCircuit
   deriving (Show)
 
 -- E@G
@@ -74,23 +71,16 @@ modifyAt g h (Branch c l e f) = case Map.lookup l g of
 
 -- Configuration C = (pi, M, E)
 data Config = Config
-  { cfgTokens    :: [Token]      
-  , cfgCircuit   :: ExtCircuit   
-  , cfgNextLabel :: Int          
+  { cfgTokens    :: [Token]
+  , cfgCircuit   :: ExtCircuit
+  , cfgNextLabel :: Int
   } deriving (Show)
 
 emptyConfig :: Config
 emptyConfig = Config [] (Leaf []) 0
 
-data Rule
-  = TLAMBDA Name
-  | TGATE String [TypedTerm]
-  | TTENSOR
-  | TVAR Name
-  | TAPP
-  | TDECOMP [Name]
-  | TLET Name
-  | TIF
+data Rule = TLAMBDA Name | TGATE String [TypedTerm] | TTENSOR | TVAR Name | TAPP
+            | TDECOMP [Name] | TLET Name | TIF
   deriving (Show)
 
 
@@ -144,12 +134,24 @@ isMultiGateAxiom z = case termOf z of
   TGate _ [] (TFun (TPair _) _) -> True
   _                               -> False
 
+isIfRule :: Zipper -> Bool
+isIfRule z = case termOf z of 
+  TIf _ _ _ _ -> True
+  _           -> False
+
 -- Just the axiom if the token is waiting on an input of a multi-input gate:
 -- path L : p, with L = input of the arrow and p = which input inside the pair
 inMultiGate :: Token -> Maybe Zipper
 inMultiGate tok = case tokPos tok of
   Pos z (Occ InConcl (L : _) N) | isMultiGateAxiom z -> Just z
   _                                                  -> Nothing
+
+waitingAtIf :: Token -> Maybe Zipper
+waitingAtIf tok = case tokPos tok of 
+  Pos z (Occ InConcl _ N)    | isIfRule z                               -> Just z
+  Pos z (Occ InConcl [] P)   | isIfRule z && childIndex z == Just 0     -> Just z
+  Pos z (Occ (InPrem y) _ N) | isIfRule z && isJust (ownerOf y [1,2] z) -> Just z
+  _                                                                     -> Nothing
 
 -- Input positions of a gate axiom, in argument order
 axiomInputs :: Zipper -> [Occ]
@@ -166,11 +168,11 @@ ruleAt (Pos z occ) = do
     TV (TLambda x _ _ _) _ -> Right (TLAMBDA x)
     TV (TTensor _ _) _     -> Right TTENSOR
     TDecomp xs _ _ _       -> Right (TDECOMP xs)
-    TApp _ _ _             -> Right TAPP
+    TApp {}             -> Right TAPP
     TLet x _ _ _ _         -> Right (TLET x)
     TGate g args _         -> Right (TGATE g args)
-    TIf _ _ _ _            -> Right TIF
-    TNew _ _ _             -> Left ("Termine non riconosciuto (new) in " ++ showPos (Pos z occ))
+    TIf {}            -> Right TIF
+    TNew {}             -> Left ("Termine non riconosciuto (new) in " ++ showPos (Pos z occ))
 
 
 ownerOf :: Name -> [Int] -> Zipper -> Maybe Zipper
@@ -266,6 +268,13 @@ applyLet x (Pos z (Occ f path pol)) = case (f, pol) of
       _      -> up z >>= \z' -> mkPos z' InConcl path
   (InConcl, N)  -> down 1 z >>= \z' -> mkPos z' InConcl path
 
+applyIf :: Pos -> Maybe Pos
+applyIf (Pos z (Occ f path pol)) = case (f, pol) of
+  (InPrem y, N) -> ownerOf y [0] z >>= \z' -> mkPos z' (InPrem y) path
+  (InPrem y, P) -> up z >>= \z' -> mkPos z' (InPrem y) path
+  (InConcl, _) -> Nothing
+
+
 applyRule :: Rule -> Pos -> Either String Pos
 applyRule rule pos =
   let target = case rule of
@@ -276,11 +285,10 @@ applyRule rule pos =
         TDECOMP xs  -> applyDecomp xs pos
         TLET x      -> applyLet x pos
         TGATE _ _   -> applyGate pos
-        TIF         -> Nothing
+        TIF         -> applyIf pos
   in case (rule, target) of
-       (TIF, _)       -> Left ("if-then-else non ancora supportato dalla macchina in " ++ showPos pos)
        (_, Just p)    -> Right p
-       (_, Nothing)   -> Left ("Regola " ++ show rule ++ " non applicabile alla posizione " ++ showPos pos)
+       (_, Nothing)   -> Left ("Rule " ++ show rule ++ " not applicable to the position " ++ showPos pos)
 
 ----- Travel tokens -----
 
@@ -324,14 +332,20 @@ fireGate g toks cfg = do
 -- indices of its tokens, in argument order
 readyGate :: [Token] -> Maybe (String, [Int])
 readyGate toks = listToMaybe
-  [ (g, idxs)
-  | (i, t) <- itoks, Just z <- [inMultiGate t]
-  , TGate g [] _ <- [termOf z]
-  , let addr = tokAddr t
-  , let at o = [ k | (k, t') <- itoks, posNode (tokPos t') == z, posOcc (tokPos t') == o, tokAddr t' == addr ]
-  , let idxs = concatMap at (axiomInputs z)
-  , length idxs == length (axiomInputs z)
-  , i == head idxs ]                      -- report each gate once, from its first token
+  [(g, idxs) |
+     (i, t) <- itoks,
+     let addr = tokAddr t,
+     Just z <- [inMultiGate t],
+     let at o
+           = [k |
+                (k, t') <- itoks,
+                posNode (tokPos t') == z,
+                posOcc (tokPos t') == o,
+                tokAddr t' == addr],
+     let idxs = concatMap at (axiomInputs z),
+     length idxs == length (axiomInputs z),
+     i == head idxs,
+     TGate g [] _ <- [termOf z]]                      -- report each gate once, from its first token
   where itoks = zip [0 ..] toks
 
 -- Fires every ready gate, keeping the tokens in their places in the list
@@ -343,6 +357,10 @@ fireAllGates toks cfg = case readyGate toks of
     let toks' = foldl (\acc (i, t) -> take i acc ++ [t] ++ drop (i + 1) acc) toks (zip idxs fired)
     fireAllGates toks' cfg'
 
+--readyIf :: [Token] -> Maybe (String, [Int])
+--readyIf toks = listToMaybe
+--  []
+
 
 allNodes :: Zipper -> [Zipper]
 allNodes z = z : concatMap allNodes [ zk | k <- [0 .. length (subForest (focus z)) - 1]
@@ -352,7 +370,7 @@ allNodes z = z : concatMap allNodes [ zk | k <- [0 .. length (subForest (focus z
 findInitials :: Zipper -> [Pos]
 findInitials root =
   let ndata     = [ Pos root o | o <- positionsOf root, occPol o == N ]
-      isNew z   = case termOf z of TNew _ _ _ -> True; _ -> False
+      isNew z   = case termOf z of TNew {} -> True; _ -> False
       newTokens = [ Pos z o | z <- allNodes root, isNew z, o <- positionsOf z, occPol o == P ]
   in ndata ++ newTokens
 
@@ -390,7 +408,7 @@ runMachine cfg0 = do
 
       -- one step for one token finished tokens and tokens waiting at a CNOT are left alone
       go (done, c) t
-        | stopCond (tokPos t) || isJust (inMultiGate t) = Right (done ++ [t], c)
+        | stopCond (tokPos t) || isJust (inMultiGate t) || isJust (waitingAtIf t) = Right (done ++ [t], c)
         | otherwise = do
             (t', c') <- stepToken t c
             return (done ++ [t'], c')

@@ -230,6 +230,9 @@ showTypePretty t            = show t -- Fallback for other unspecified types
 showTermPretty :: TypedTerm -> String
 showTermPretty term = case term of
   TV val _                   -> showValPretty val
+  TGate g [] _               -> g                                   -- the gate axiom
+  TGate g [TV (TTensor ts _) _] _                                   -- n arguments packed in a tuple
+                             -> g ++ "(" ++ intercalate ", " (map showTermPretty ts) ++ ")"
   TGate g args _             -> g ++ "(" ++ intercalate ", " (map showTermPretty args) ++ ")"
   TNew _ varId _             -> varId
   TApp f arg _               -> "(" ++ showTermPretty f ++ " " ++ showTermPretty arg ++ ")"
@@ -240,5 +243,59 @@ showTermPretty term = case term of
 showValPretty :: TypedValue -> String
 showValPretty val = case val of
   TVar x _                   -> x
-  TLambda x argT body _      -> "(\\" ++ x ++ ":" ++ show argT ++ ". " ++ showTermPretty body ++ ")"
+  TLambda x argT body _      -> "(λ" ++ x ++ " : " ++ showType argT ++ ". " ++ showTermPretty body ++ ")"
   TTensor ts _               -> "<" ++ intercalate ", " (map showTermPretty ts) ++ ">"
+
+showType :: Type -> String
+showType TQbit       = "qbit"
+showType TBit        = "bit"
+showType (TFun a b)  = atom a ++ " ⊸ " ++ showType b
+  where atom t@(TFun _ _) = "(" ++ showType t ++ ")"
+        atom t            = showType t
+showType (TPair ts)  = intercalate " ⊗ " (map comp ts)
+  where comp t@(TFun _ _)  = "(" ++ showType t ++ ")"
+        comp t@(TPair _)   = "(" ++ showType t ++ ")"
+        comp t             = showType t
+
+showJudgement :: Concl -> String
+showJudgement (prem, term, ty) =
+  let ctx = intercalate ", " [ x ++ " : " ++ showType t | (x, t) <- Map.toList prem ]
+  in (if null ctx then "" else ctx ++ " ") ++ "⊢ " ++ showTermPretty term ++ " : " ++ showType ty
+
+ruleName :: TypedTerm -> String
+ruleName term = case term of
+  TV (TVar _ _) _      -> "ax"
+  TV (TLambda {}) _    -> "⊸I"
+  TV (TTensor _ _) _   -> "⊗I"
+  TApp {}              -> "⊸E"
+  TGate _ [] _         -> "gate"
+  TGate {}             -> "⊸E"
+  TNew {}              -> "new"
+  TLet {}              -> "let"
+  TDecomp {}           -> "⊗E"
+  TIf {}               -> "if"
+
+drawDerivation :: TypeDerivation -> String
+drawDerivation = unlines . fst . draw
+  where
+    draw :: TypeDerivation -> ([String], Int)
+    draw (Node concl@(_, term, _) subs) =
+      let kids    = map draw subs
+          gap     = 4
+          height  = maximum (0 : map (length . fst) kids)
+          padTop (ls, w) = replicate (height - length ls) (replicate w ' ') ++ ls
+          premRow = foldr1 (zipWith (\a b -> a ++ replicate gap ' ' ++ b)) (map padTop kids)
+          premW   = if null kids then 0 else sum (map snd kids) + gap * (length kids - 1)
+          cStr    = showJudgement concl
+          barW    = max premW (length cStr)
+          bar     = replicate barW '─' ++ " " ++ ruleName term
+          width   = length bar
+          centre s = let total = barW - length s
+                         left  = total `div` 2
+                     in replicate left ' ' ++ s ++ replicate (total - left) ' '
+          pad s   = s ++ replicate (width - length s) ' '
+          premLs  = if null kids then [] else map (pad . centre) premRow
+      in (premLs ++ [pad bar, pad (centre cStr)], width)
+
+printDerivationTree :: TypeDerivation -> IO ()
+printDerivationTree = putStr . drawDerivation

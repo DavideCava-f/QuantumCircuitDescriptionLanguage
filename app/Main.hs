@@ -1,6 +1,5 @@
 module Main where
 
-import Text.Pretty.Simple (pPrint)
 import Text.Megaparsec hiding (Pos)
 import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer()
@@ -172,13 +171,14 @@ main = do
                     case annotate ctx term of
                         Left typeErr -> putStrLn $ "Type/Linearity Error: " ++ typeErr
                         Right (_, typedAST) -> do
-                            pPrint (startDerivation (Map.fromList ctx) typedAST)
                             let c = startDerivation (Map.fromList ctx) typedAST
+                            printDerivationTree c
                             prettyPrintPositions "Initials positions: " (findInitials (fromTree c))
+                            let (cfg, _) = addTokens (findInitials (fromTree c)) emptyConfig
+                            print (setupInitialTokens cfg)
                             case startMachine c of
                               Left machineErr -> putStrLn $ "Machine error: " ++ machineErr
                               Right (final, assocList, finalList) -> do
-                                --print final
                                 --prettyPrintRootType c
                                 --prettyPrintAssocList assocList finalList
                                 let wireNames = [ (lab, wireName p) | (p, lab) <- assocList ++ finalList ]
