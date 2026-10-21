@@ -23,7 +23,6 @@ startDerivation t =
         cleanDerivationTree tree
 
 
-
 buildDerivation :: Prem -> TypedTerm -> TypeDerivation
 buildDerivation prem term = case term of
   -- Caso TV: Derivazione valore

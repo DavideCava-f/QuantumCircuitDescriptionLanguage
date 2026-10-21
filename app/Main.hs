@@ -9,6 +9,7 @@ import Lexer
 import TypeTree
 import CreateDerivation
 import CircuitGraph
+import ToQASM
 import System.Environment (getArgs, getProgName)
 
 -- Parsing Dei tipi
@@ -179,11 +180,13 @@ main = do
                         Right (typedAST, remainingCtx) -> do
   --                          pPrint typedAST
                             let c = startDerivation typedAST in do
---                                printDerivation c
+    --                            printDerivation c
                                 let (final, assocList, finalList) = startMachine c
-                                print final
-                                prettyPrintRootType c
-                                prettyPrintAssocList assocList finalList
+      --                          print final
+                             --   prettyPrintRootType c
+                           --     prettyPrintAssocList assocList finalList
+                                print (toQasm final)
+                                
         [] -> putStrLn "Errore: Devi specificare il nome di un file! (es. cabal run -- file.qqdc)"
 
 

@@ -1,1 +1,1 @@
-\x : qbit. X(x)
+\x : qbit. H(X(x))

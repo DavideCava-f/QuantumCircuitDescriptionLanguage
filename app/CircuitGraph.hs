@@ -24,7 +24,7 @@ data Rule = TLAMBDA String | TGATE String [TypedTerm] | TTENSOR | TVAR | TAPP | 
 data Position = L | R deriving (Show, Eq)
 data Polarity = P | N deriving (Show, Eq)
 type Id = (TypedTerm, Polarity, [Position], PosInSeq, [PosInPi])-- deriving (Show)
-data Label = Lab Int deriving (Show,Eq)
+data Label = Lab Int deriving (Show,Eq,Ord)
 type Token = (Id, Label, Address) 
 type DATA = [Id]
 data Cable 
