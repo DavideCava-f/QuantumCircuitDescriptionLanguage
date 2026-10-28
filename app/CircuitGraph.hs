@@ -135,7 +135,7 @@ isMultiGateAxiom z = case termOf z of
   _                               -> False
 
 isIfRule :: Zipper -> Bool
-isIfRule z = case termOf z of 
+isIfRule z = case termOf z of
   TIf _ _ _ _ -> True
   _           -> False
 
@@ -147,11 +147,11 @@ inMultiGate tok = case tokPos tok of
   _                                                  -> Nothing
 
 waitingAtIf :: Token -> Maybe Zipper
-waitingAtIf tok = case tokPos tok of 
-  Pos z (Occ InConcl _ N)    | isIfRule z                               -> Just z
-  Pos z (Occ InConcl [] P)   | isIfRule z && childIndex z == Just 0     -> Just z
-  Pos z (Occ (InPrem y) _ N) | isIfRule z && isJust (ownerOf y [1,2] z) -> Just z
-  _                                                                     -> Nothing
+waitingAtIf tok = case tokPos tok of
+  Pos z (Occ InConcl _ N)    | isIfRule z                                          -> Just z
+  Pos z (Occ InConcl [] P)   | childIndex z == Just 0, Just z' <- up z, isIfRule z'-> Just z'
+  Pos z (Occ (InPrem y) _ N) | isIfRule z && isJust (ownerOf y [1,2] z)            -> Just z
+  _                                                                                -> Nothing
 
 -- Input positions of a gate axiom, in argument order
 axiomInputs :: Zipper -> [Occ]
@@ -271,8 +271,10 @@ applyLet x (Pos z (Occ f path pol)) = case (f, pol) of
 applyIf :: Pos -> Maybe Pos
 applyIf (Pos z (Occ f path pol)) = case (f, pol) of
   (InPrem y, N) -> ownerOf y [0] z >>= \z' -> mkPos z' (InPrem y) path
-  (InPrem y, P) -> up z >>= \z' -> mkPos z' (InPrem y) path
-  (InConcl, _) -> Nothing
+  (InPrem y, P) -> case childIndex z of
+      Just 0 -> up z >>= \z' -> mkPos z' (InPrem y) path
+      _      -> Nothing
+  (InConcl, _)  -> Nothing
 
 
 applyRule :: Rule -> Pos -> Either String Pos
@@ -312,9 +314,7 @@ stepToken tok cfg = do
       pos' <- applyRule rule pos
       return (tok { tokPos = pos' }, cfg)
 
--- Circuit rule for a gate with several inputs: all its tokens are on the
--- inputs of the axiom (in argument order), so the gate is emitted in one
--- piece and every token moves to its output.
+-- Circuit rule for a gate with several inputs
 fireGate :: String -> [Token] -> Config -> Either String ([Token], Config)
 fireGate g toks cfg = do
   poss <- mapM (applyRule (TGATE g []) . tokPos) toks
@@ -328,39 +328,71 @@ fireGate g toks cfg = do
                       , cfg { cfgCircuit = modifyAt (tokAddr t) (++ [gate]) (cfgCircuit cfg)
                             , cfgNextLabel = n + length toks } )
 
--- The first multi-input gate with all its inputs occupied: its name and the
--- indices of its tokens, in argument order
-readyGate :: [Token] -> Maybe (String, [Int])
-readyGate toks = listToMaybe
-  [(g, idxs) |
-     (i, t) <- itoks,
-     let addr = tokAddr t,
-     Just z <- [inMultiGate t],
-     let at o
-           = [k |
-                (k, t') <- itoks,
-                posNode (tokPos t') == z,
-                posOcc (tokPos t') == o,
-                tokAddr t' == addr],
-     let idxs = concatMap at (axiomInputs z),
-     length idxs == length (axiomInputs z),
-     i == head idxs,
-     TGate g [] _ <- [termOf z]]                      -- report each gate once, from its first token
+--fireIf :: Zipper -> [Token] -> Token -> Config -> Either String ([Token], Config)
+--fireIf z toks bitTok cfg = do 
+--  (toksThen, circThen, cfgThen) <- runBranch z 1 toks cfg
+--  (toksElse, circElse, cfgElse) <- runBranch z 2 toks cfgThen
+--
+--  return 
+
+
+
+
+runBranch :: Zipper -> Int -> [Token] -> Config -> Either String ([Token], Circuit, Config)
+runBranch z b toks cfg = do
+  let note msg = maybe (Left msg) Right 
+  zb    <- note "" (down b z)
+  toks' <- note "" (mapM (reroot zb) toks)
+  let stopCond p = posNode p == zb && occPol(posOcc p) == P
+      cfgB       = emptyConfig {cfgTokens = toks', cfgNextLabel = cfgNextLabel cfg}
+  (finalToks, cfgEnd) <- runLoop stopCond toks' cfgB
+  circ                <- note "" (at emptyAddress (cfgCircuit cfgEnd))
+  return (finalToks, circ, cfgEnd) 
+
+ 
+reroot :: Zipper -> Token -> Maybe Token
+reroot z' tok = do
+  let Pos _ (Occ f path _) = tokPos tok
+  p <- mkPos z' f path
+  return tok { tokPos = p }
+
+
+-- Positions that must all be occupied before a multi-input gate axiom fires
+gateAxiomInputs :: Zipper -> [Pos]
+gateAxiomInputs z = [ Pos z o | o <- axiomInputs z ]
+
+-- Positions that must all be occupied before an if-then-else fires (synchronous rule):
+ifInputs :: Zipper -> [Pos]
+ifInputs z =
+  [ Pos z o | o <- positionsOf z, occPol o == N, not (guardOwned o) ]
+  ++ [ Pos z0 (Occ InConcl [] P) | Just z0 <- [down 0 z] ]
+  where
+    guardOwned (Occ (InPrem y) _ _) = isJust (ownerOf y [0] z)
+    guardOwned _                    = False
+
+readyTokens :: (Token -> Maybe Zipper) -> (Zipper -> [Pos]) -> [Token] -> Maybe (Zipper, [Int])
+readyTokens inPlace required toks = listToMaybe
+  [ (z, idxs)
+  | (i, t) <- itoks
+  , Just z <- [inPlace t]
+  , let addr = tokAddr t
+  , let occupants p = [ k | (k, t') <- itoks, tokPos t' == p, tokAddr t' == addr ]
+  , let idxs = concatMap occupants (required z)
+  , length idxs == length (required z)
+  , i == head idxs ]
   where itoks = zip [0 ..] toks
 
 -- Fires every ready gate, keeping the tokens in their places in the list
 fireAllGates :: [Token] -> Config -> Either String ([Token], Config)
-fireAllGates toks cfg = case readyGate toks of
+fireAllGates toks cfg = case readyTokens inMultiGate gateAxiomInputs toks of
   Nothing        -> Right (toks, cfg)
-  Just (g, idxs) -> do
+  Just (z, idxs) -> do
+    g <- case termOf z of
+           TGate g [] _ -> Right g
+           _            -> Left ("fireAllGates: not a gate axiom at " ++ show (pathOf z))
     (fired, cfg') <- fireGate g (map (toks !!) idxs) cfg
     let toks' = foldl (\acc (i, t) -> take i acc ++ [t] ++ drop (i + 1) acc) toks (zip idxs fired)
     fireAllGates toks' cfg'
-
---readyIf :: [Token] -> Maybe (String, [Int])
---readyIf toks = listToMaybe
---  []
-
 
 allNodes :: Zipper -> [Zipper]
 allNodes z = z : concatMap allNodes [ zk | k <- [0 .. length (subForest (focus z)) - 1]
@@ -402,29 +434,32 @@ setupInitialTokens cfg =
 
 ----- Core Running Machine -----
 
+runLoop :: (Pos -> Bool) -> [Token] -> Config -> Either String ([Token], Config)
+runLoop stopCond = loop
+  where
+    waiting t = stopCond (tokPos t) || isJust (inMultiGate t) || isJust (waitingAtIf t)
+
+    -- one step for one token
+    go (done, c) t
+      | waiting t = Right (done ++ [t], c)
+      | otherwise = do
+          (t', c') <- stepToken t c
+          return (done ++ [t'], c')
+
+    loop toks c
+      | all (stopCond . tokPos) toks = Right (toks, c)
+      | otherwise = do
+          (toks1, c1) <- foldM go ([], c) toks
+          (toks2, c2) <- fireAllGates toks1 c1
+          if map tokPos toks2 == map tokPos toks
+            then Left ("Deadlock: tokens waiting at " ++ show
+                       [ showPos (tokPos t) | t <- toks2, not (stopCond (tokPos t)) ])
+            else loop toks2 c2
+
 runMachine :: Config -> Either String (Circuit, TokenLabelList)
 runMachine cfg0 = do
   let cfg1 = setupInitialTokens cfg0
-
-      -- one step for one token finished tokens and tokens waiting at a CNOT are left alone
-      go (done, c) t
-        | stopCond (tokPos t) || isJust (inMultiGate t) || isJust (waitingAtIf t) = Right (done ++ [t], c)
-        | otherwise = do
-            (t', c') <- stepToken t c
-            return (done ++ [t'], c')
-
-      -- every free token moves one step, then the ready CNOTs fire and repeats until all tokens have finished
-      loop toks c
-        | all (stopCond . tokPos) toks = Right (toks, c)
-        | otherwise = do
-            (toks1, c1) <- foldM go ([], c) toks
-            (toks2, c2) <- fireAllGates toks1 c1
-            if map tokPos toks2 == map tokPos toks
-              then Left ("Deadlock: tokens waiting at " ++ show
-                         [ showPos (tokPos t) | t <- toks2, not (stopCond (tokPos t)) ])
-              else loop toks2 c2
-
-  (finalToks, cfgEnd) <- loop (cfgTokens cfg1) cfg1 { cfgTokens = [] }
+  (finalToks, cfgEnd) <- runLoop stopCond (cfgTokens cfg1) cfg1 { cfgTokens = [] }
   circuit <- maybe (Left "Invalid empty address in the extended circuit")
                     Right (at emptyAddress (cfgCircuit cfgEnd))
   return (circuit, [ (tokPos t, tokLabel t) | t <- finalToks ])
