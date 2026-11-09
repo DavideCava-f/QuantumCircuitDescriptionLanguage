@@ -5,7 +5,7 @@ import qualified Data.Map as Map
 import TypeTree (Type(..), Name, TypedTerm(..), TypedValue(..))
 import CreateDerivation (Concl, TypeDerivation, Tree(..))
 import DerivationZipper
-import Data.Maybe (listToMaybe, isJust)
+import Data.Maybe (listToMaybe, isJust, fromMaybe)
 import Data.List (elemIndex)
 
 
@@ -328,14 +328,33 @@ fireGate g toks cfg = do
                       , cfg { cfgCircuit = modifyAt (tokAddr t) (++ [gate]) (cfgCircuit cfg)
                             , cfgNextLabel = n + length toks } )
 
---fireIf :: Zipper -> [Token] -> Token -> Config -> Either String ([Token], Config)
---fireIf z toks bitTok cfg = do 
---  (toksThen, circThen, cfgThen) <- runBranch z 1 toks cfg
---  (toksElse, circElse, cfgElse) <- runBranch z 2 toks cfgThen
---
---  return 
+fireIf :: Zipper -> [Token] -> Token -> Config -> Either String ([Token], Config)
+fireIf z toks bitTok cfg = do 
+  (toksThen, circThen, cfgThen) <- runBranch z 1 toks cfg
+  (toksElse, circElse, cfgElse) <- runBranch z 2 toks cfgThen
+  let toksElse'                 = [(tokLabel tokElse, tokLabel tokThen) | tokElse <- toksElse,  
+                                   tokThen <- toksThen, (posOcc . tokPos) tokElse == (posOcc . tokPos) tokThen]
+  let applyRename               = map renamePerGate 
+      renamePerGate g = case g of 
+        Wire s l1 l2            -> Wire s (returnLabel l1) (returnLabel l2)
+        MultiGate s ls1 ls2     -> MultiGate s (map returnLabel ls1) (map returnLabel ls2)
+        Cond l c1 c2            -> Cond (returnLabel l) (map renamePerGate c1) (map renamePerGate c2)
+      returnLabel l = fromMaybe l (lookup l toksElse') 
+  if length toksElse' == length toksElse && length toksElse == length toksThen 
+    then Right ()
+    else Left ("Unmatched ocurrences" ++ show [toks' | toks' <- toksElse, tokThen <- toksThen, (posOcc . tokPos) toks' /= (posOcc . tokPos) tokThen])
+  let note msg = maybe (Left msg) Right
+      newGate    = Cond (tokLabel bitTok) circThen (applyRename circElse)
+  listOfTokens <- note (show (pathOf z)) (mapM (reroot z) toksThen)
+  return (listOfTokens, cfg {cfgCircuit = modifyAt (tokAddr bitTok) (++ [newGate]) (cfgCircuit cfg), cfgNextLabel = cfgNextLabel cfgElse})
 
-
+fireAllIfs :: [Token] -> Config -> Either String ([Token], Config)
+fireAllIfs toks cfg = case readyTokens waitingAtIf ifInputs toks of 
+  Nothing -> Right (toks, cfg)
+  Just (z, idxs) -> do
+    (fired, cfg') <- fireIf z (map (toks !!) (init idxs)) (toks !! last idxs) cfg
+    let toks' = [t | (i,t) <- zip [0..] toks, notElem i idxs]++fired
+    fireAllIfs toks' cfg'
 
 
 runBranch :: Zipper -> Int -> [Token] -> Config -> Either String ([Token], Circuit, Config)
@@ -451,10 +470,11 @@ runLoop stopCond = loop
       | otherwise = do
           (toks1, c1) <- foldM go ([], c) toks
           (toks2, c2) <- fireAllGates toks1 c1
-          if map tokPos toks2 == map tokPos toks
+          (toks3, c3) <- fireAllIfs toks2 c2
+          if map tokPos toks3 == map tokPos toks
             then Left ("Deadlock: tokens waiting at " ++ show
-                       [ showPos (tokPos t) | t <- toks2, not (stopCond (tokPos t)) ])
-            else loop toks2 c2
+                       [ showPos (tokPos t) | t <- toks3, not (stopCond (tokPos t)) ])
+            else loop toks3 c3
 
 runMachine :: Config -> Either String (Circuit, TokenLabelList)
 runMachine cfg0 = do

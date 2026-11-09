@@ -200,14 +200,48 @@ prettyPrintRootType derivation = putStrLn (formatRootType derivation)
 
 
 gateInputs, gateOutputs :: Gate -> [Label]
-gateInputs  (Wire _ i _)     = [i]
+gateInputs  (Wire _ i _)         = [i]
 gateInputs  (MultiGate _ is _)   = is
-gateOutputs (Wire _ _ o)     = [o]
+-- An if-then-else consumes its bit and the wires entering its branches
+-- (both branches share input and output labels, so the then-branch suffices)
+gateInputs  (Cond b thenC _)     = b : circuitInputs thenC
+gateOutputs (Wire _ _ o)         = [o]
 gateOutputs (MultiGate _ _ os)   = os
+gateOutputs (Cond _ thenC _)     = circuitOutputs thenC
+
+-- Labels that enter a circuit from outside / leave it without being consumed inside
+circuitInputs, circuitOutputs :: Circuit -> [Label]
+circuitInputs  c = [ l | g <- c, l <- gateInputs g,  l `notElem` concatMap gateOutputs c ]
+circuitOutputs c = [ l | g <- c, l <- gateOutputs g, l `notElem` concatMap gateInputs c ]
+
+-- Label with which a wire entering a gate with label l leaves it.
+-- Returns l itself when the gate consumes the wire (the bit of an if).
+outFor :: Gate -> Label -> Label
+outFor (Wire _ _ o) _          = o
+outFor (MultiGate _ is os) l   = maybe l (os !!) (lookup l (zip is [0 ..]))
+outFor (Cond b thenC _) l
+  | l == b                          = l
+  | end `elem` circuitOutputs thenC = end
+  | otherwise                       = l      -- consumed inside the branch
+  where end = snd (wireThrough thenC l)
+
+-- Gates crossed by the wire with label l inside a circuit, and the label it ends with
+wireThrough :: Circuit -> Label -> ([Gate], Label)
+wireThrough c l = case [ g | g <- c, l `elem` gateInputs g ] of
+  []      -> ([], l)
+  (g : _) -> let l' = outFor g l
+             in if l' == l then ([g], l)
+                else let (gs, end) = wireThrough c l' in (g : gs, end)
 
 isIdentityGate :: Gate -> Bool
 isIdentityGate (Wire "I" _ _) = True
-isIdentityGate _                    = False
+isIdentityGate _              = False
+
+-- Gates that span several rows (drawn with a vertical line between them)
+isMultiRow :: Gate -> Bool
+isMultiRow (MultiGate {}) = True
+isMultiRow (Cond {})      = True
+isMultiRow _              = False
 
 -- Readable name of the wire starting/ending at a position: the context
 -- variable, the name of the `new`, or the L/R path in the conclusion.
@@ -241,22 +275,21 @@ asciiCircuit names circuit
     -- one extra final column, so that a wire with no gates is still drawn
     nCols = 2 + maximum ((-1) : [ c | (gi, c) <- Map.toList cols, not (isIdentityGate (gateAt gi)) ])
 
-    -- Wire: (initial label, gates crossed, final label)
-    outFor (Wire _ _ o) _ = o
-    outFor (MultiGate _ is os) l = maybe l (os !!) (lookup l (zip is [0 ..]))
+    -- Wire: (gates crossed, labels carried along the way, final label, consumed at the end?)
     chain l = case Map.lookup l consumer of
-      Nothing -> ([], l)
-      Just gi -> let (gs, end) = chain (outFor (gateAt gi) l) in (gi : gs, end)
-    rows = [ (l, gs, end) | l <- initials, let (gs, end) = chain l ]
+      Nothing -> ([], [l], l, False)
+      Just gi -> let l' = outFor (gateAt gi) l
+                 in if l' == l then ([gi], [l], l, True)
+                    else let (gs, ls, end, t) = chain l' in (gi : gs, l : ls, end, t)
+    rows = [ (l, chain l) | l <- initials ]
 
-    -- Row of a gate: the row whose wire crosses it with the given label
+    -- Row of a label: the row of the wire that carries it
     rowOfLabel = Map.fromList
-      [ (lab, r) | (r, (l0, gs, _)) <- zip [0 :: Int ..] rows
-                 , lab <- l0 : concat [ gateOutputs (gateAt gi) | gi <- gs ] ]
+      [ (lab, r) | (r, (_, (_, ls, _, _))) <- zip [0 :: Int ..] rows, lab <- ls ]
     rowIn lab = Map.findWithDefault (-1) lab rowOfLabel
 
-    cnotSpans = [ (cols Map.! gi, minimum rs, maximum rs)
-                | (gi, MultiGate _ is _) <- indexed, let rs = map rowIn is ]
+    spans = [ (cols Map.! gi, minimum rs, maximum rs)
+            | (gi, g) <- indexed, isMultiRow g, let rs = map rowIn (gateInputs g) ]
 
     -- Column where the wire becomes classical (after an M), if any
     measureCol gs = case [ cols Map.! gi | gi <- gs, Wire "M" _ _ <- [gateAt gi] ] of
@@ -264,8 +297,22 @@ asciiCircuit names circuit
       (c : _) -> Just c
 
     nameOf l = maybe "" (++ " ") (lookup l names) ++ show l
-    leftWidth = maximum (0 : [ length (nameOf l) | (l, _, _) <- rows ])
+    leftWidth = maximum (0 : [ length (nameOf l) | (l, _) <- rows ])
     padRight n s = s ++ replicate (n - length s) ' '
+
+    -- One character summarising what a branch does to a wire: the gate's
+    -- initial if it crosses exactly one gate, the wire if none, '*' if several
+    branchChar wire c l =
+      let (gs, end) = wireThrough c l
+          -- a gate that consumes the wire (an if taking it as bit) is not drawn on it
+          crossed = [ g | g <- gs, not (isIdentityGate g), end `notElem` gateInputs g ]
+      in case crossed of
+           []  -> wire
+           [g] -> gateChar g
+           _   -> '*'
+    gateChar (Wire g _ _)    = head g
+    gateChar (MultiGate {})  = '#'
+    gateChar (Cond {})       = '?'
 
     cell :: [Int] -> Maybe Int -> Int -> Int -> String
     cell gs mCol r c =
@@ -276,14 +323,22 @@ asciiCircuit names circuit
            (Wire g _ _ : _)   -> [wire, wire] ++ take 1 g ++ [wire, wire]
            -- controls (all inputs but the last) as 'o', the target as 'X'
            (MultiGate _ is _ : _) -> [wire, wire] ++ (if rowIn (last is) == r then "X" else "o") ++ [wire, wire]
+           -- the bit as 'o'; on each data wire "then/else" summarised by one char per branch
+           (g@(Cond b thenC elseC) : _)
+             | rowIn b == r -> [wire, wire] ++ "o" ++ [wire, wire]
+             | otherwise    -> case [ l | l <- gateInputs g, rowIn l == r ] of
+                 (l : _) -> [wire, branchChar wire thenC l, '/', branchChar wire elseC l, wire]
+                 []      -> plain
            []                       -> plain
 
-    gapCell r c = if any (\(cc, lo, hi) -> cc == c && lo <= r && r < hi) cnotSpans then "  |  " else "     "
+    gapCell r c = if any (\(cc, lo, hi) -> cc == c && lo <= r && r < hi) spans then "  |  " else "     "
 
-    rowLines r (l0, gs, end) =
+    rowLines r (l0, (gs, _, end, consumed)) =
       let mCol  = measureCol gs
-          body  = concatMap (cell gs mCol r) [0 .. nCols - 1]
-          line  = padRight leftWidth (nameOf l0) ++ " " ++ body ++ " " ++ nameOf end
+          -- a consumed wire (the bit of an if) stops at its last gate
+          stopCol = if consumed then Just (cols Map.! last gs) else Nothing
+          body  = concatMap (\c -> if maybe False (< c) stopCol then "     " else cell gs mCol r c) [0 .. nCols - 1]
+          line  = padRight leftWidth (nameOf l0) ++ " " ++ body ++ " " ++ (if consumed then "" else nameOf end)
           gap   = replicate (leftWidth + 1) ' ' ++ concatMap (gapCell r) [0 .. nCols - 1]
       in if r < length rows - 1 then [line, gap] else [line]
 
